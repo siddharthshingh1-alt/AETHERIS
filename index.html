@@ -3,12 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
-    <meta name="description" content="An application built with Google AI Studio." />
-    <meta property="og:title" content="My Google AI Studio App" />
-    <meta property="og:description" content="An application built with Google AI Studio." />
-    <meta property="og:type" content="website" />
-    <meta name="twitter:card" content="summary_large_image" />
+    <title>Aetheris Cognitive Architecture</title>
+    <meta name="description" content="Predictive Cognitive Architecture with Causal Modeling, Metacognition, and Multi-Level Learning." />
+    <script>
+      // Ensure window.fetch is writable and configurable in iframe/sandboxed environments
+      (function() {
+        try {
+          var _rawFetch = window.fetch;
+          var _customFetch = _rawFetch ? function() { return _rawFetch.apply(this, arguments); } : undefined;
+          Object.defineProperty(window, 'fetch', {
+            get: function() {
+              return _customFetch;
+            },
+            set: function(fn) {
+              _customFetch = fn;
+            },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {
+          // ignore if already non-configurable
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
