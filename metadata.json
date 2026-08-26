@@ -1,0 +1,6 @@
+{
+  "name": "AGI Cognitive Architecture System",
+  "description": "Continuous general intelligence architecture with world modeling, multi-layer memory, probabilistic prediction, causal reasoning, prediction error feedback loops, and controlled self-improvement experiments.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
