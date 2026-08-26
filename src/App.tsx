@@ -1,51 +1,131 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  createInitialCognitiveSystem, 
-  executeFullCognitiveCycle, 
-  CognitiveSystemState 
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import {
+  createInitialCognitiveSystem,
+  executeFullCognitiveCycle,
+  CognitiveSystemState,
 } from './cognitive/engine';
 import { runSandboxExperiment } from './cognitive/selfImprovement';
-import { Header } from './components/Header';
-import { CognitiveCycleFlow } from './components/CognitiveCycleFlow';
-import { WorldModelView } from './components/WorldModelView';
-import { PredictionView } from './components/PredictionView';
-import { MemoryView } from './components/MemoryView';
-import { EnvironmentView } from './components/EnvironmentView';
-import { LearningView } from './components/LearningView';
-import { MetacognitionView } from './components/MetacognitionView';
-import { ObservabilityTrace } from './components/ObservabilityTrace';
 import { DeepReasoningModal } from './components/DeepReasoningModal';
-import { 
-  Globe, 
-  TrendingUp, 
-  Database, 
-  Building2, 
-  GraduationCap, 
-  HelpCircle, 
-  Terminal,
-  Layers,
-  Sparkles,
-  Info
-} from 'lucide-react';
+import {
+  evaluateCognitiveDecision,
+  createDefaultExperienceStore,
+  CognitiveDecisionTrace,
+} from './cognitive/chatDecisionEngine';
+import { ExperienceStore } from './cognitive/experienceStore';
+
+// Redesigned User-Friendly Components
+import { FirstTimeExperience } from './components/FirstTimeExperience';
+import { AppHeader } from './components/AppHeader';
+import { HomeDashboard } from './components/HomeDashboard';
+import { ChatView } from './components/ChatView';
+import { UserMemoryView } from './components/UserMemoryView';
+import { MemoryDetailModal } from './components/MemoryDetailModal';
+import { UserLearningView } from './components/UserLearningView';
+import { DecisionExplanationModal, DecisionExplanationData } from './components/DecisionExplanationModal';
+import { ActivityTimelineView } from './components/ActivityTimelineView';
+import { UserExperimentsView } from './components/UserExperimentsView';
+import { SettingsView } from './components/SettingsView';
+import { ExpertModeView } from './components/ExpertModeView';
+
+// State Types
+import {
+  UserProfile,
+  UserFriendlyMemoryItem,
+  ActivityEvent,
+  ChatMessage,
+  AppNavTab,
+  AppMode,
+} from './types/userState';
 
 export default function App() {
+  // 1. Cognitive Engine Core State
   const [state, setState] = useState<CognitiveSystemState>(() => createInitialCognitiveSystem());
-  const [activeNavTab, setActiveNavTab] = useState<
-    'PIPELINE' | 'WORLD_MODEL' | 'PREDICTION' | 'MEMORY' | 'ENVIRONMENT' | 'LEARNING' | 'METACOGNITION' | 'TRACES'
-  >('PIPELINE');
+
+  // 2. User Profile / Personal Aetheris State
+  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
+    const saved = localStorage.getItem('aetheris_user_profile');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        // fallback
+      }
+    }
+    return {
+      name: 'ARIA',
+      domains: ['Business', 'Work'],
+      contextDescription:
+        'Managing supplier selection and inventory logistics. High port congestion causes unexpected maritime delivery delays.',
+      createdAt: new Date().toISOString(),
+      isOnboarded: false,
+    };
+  });
+
+  // 3. Navigation & Mode
+  const [activeTab, setActiveTab] = useState<AppNavTab>('HOME');
+  const [appMode, setAppMode] = useState<AppMode>('SIMPLE');
+
+  // 4. Modals State
+  const [selectedMemoryDetail, setSelectedMemoryDetail] = useState<UserFriendlyMemoryItem | null>(null);
+  const [decisionExplanationData, setDecisionExplanationData] = useState<DecisionExplanationData | null>(null);
   const [isDeepReasoningOpen, setIsDeepReasoningOpen] = useState<boolean>(false);
 
-  // Autonomous cognitive loop timer
-  const autonomousRef = useRef<boolean>(state.isRunningAutonomous);
-  autonomousRef.current = state.isRunningAutonomous;
-  const intervalRef = useRef<number>(state.cycleIntervalMs);
-  intervalRef.current = state.cycleIntervalMs;
+  // 5. User-Taught Custom Memories (Local Overrides & Teaching)
+  const [userTaughtMemories, setUserTaughtMemories] = useState<UserFriendlyMemoryItem[]>([
+    {
+      id: 'taught_alpha_gsm',
+      title: 'Supplier Alpha — Double-check GSM measurements',
+      description: 'Whenever placing an order with Supplier Alpha, verify GSM fabric measurements twice before shipment dispatch.',
+      category: 'FACTS',
+      source: 'TAUGHT_BY_YOU',
+      confidence: 0.95,
+      createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
+      timesUsed: 4,
+      timesInfluenced: 3,
+      details: {
+        whatLearned: 'Supplier Alpha requires explicit pre-shipment GSM inspection verification.',
+        whyBelieveThis: 'Explicitly instructed by user during initial operational setup.',
+      },
+    },
+  ]);
 
+  // 5b. Cognitive Experience Store & Decision Traces for Live Chat
+  const experienceStoreRef = useRef<ExperienceStore>(createDefaultExperienceStore());
+  const decisionTracesRef = useRef<Map<string, CognitiveDecisionTrace>>(new Map());
+
+  // 6. User Chat History
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: 'msg_welcome',
+      sender: 'aetheris',
+      timestamp: '10:00 AM',
+      text: `Hello! I'm ${userProfile.name}. I'm ready to learn from your experiences and help you make better decisions under uncertainty.`,
+    },
+  ]);
+
+  // 7. Activity History (Derived from traces & user actions)
+  const [userActivityEvents, setUserActivityEvents] = useState<ActivityEvent[]>([
+    {
+      id: 'act_init',
+      timestamp: new Date().toISOString(),
+      timeString: '10:00 AM',
+      type: 'MEMORY_CREATED',
+      title: 'Aetheris workspace initialized',
+      description: `Personal learning environment configured for ${userProfile.domains.join(', ')}.`,
+    },
+  ]);
+
+  // Save user profile changes to local storage
+  useEffect(() => {
+    localStorage.setItem('aetheris_user_profile', JSON.stringify(userProfile));
+  }, [userProfile]);
+
+  // Autonomous cognitive loop timer (Expert mode or background)
   useEffect(() => {
     let timer: any = null;
     if (state.isRunningAutonomous) {
       timer = setInterval(() => {
-        setState(prevState => executeFullCognitiveCycle(prevState));
+        setState((prevState) => executeFullCognitiveCycle(prevState));
       }, state.cycleIntervalMs);
     }
     return () => {
@@ -53,332 +133,600 @@ export default function App() {
     };
   }, [state.isRunningAutonomous, state.cycleIntervalMs]);
 
+  // Handle autonomous step
   const handleStepCycle = () => {
-    setState(prevState => executeFullCognitiveCycle(prevState));
+    setState((prevState) => {
+      const next = executeFullCognitiveCycle(prevState);
+      // Append an activity event for the cycle
+      if (next.activeTrace) {
+        const hasHighError = next.activeTrace.predictionError && next.activeTrace.predictionError.overallNormalizedError > 0.3;
+        setUserActivityEvents((prev) => [
+          {
+            id: `act_${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            timeString: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            type: hasHighError ? 'ERROR' : 'DECISION',
+            title: `Executed cycle #${next.currentCycle}`,
+            description: `Chosen action: ${next.activeTrace?.plan?.selectedAction?.title || 'Evaluated step'}. Prediction error: ${(next.activeTrace?.predictionError?.overallNormalizedError || 0).toFixed(2)}`,
+          },
+          ...prev.slice(0, 49),
+        ]);
+      }
+      return next;
+    });
   };
 
   const handleToggleAutonomous = () => {
-    setState(prevState => ({
+    setState((prevState) => ({
       ...prevState,
-      isRunningAutonomous: !prevState.isRunningAutonomous
+      isRunningAutonomous: !prevState.isRunningAutonomous,
     }));
   };
 
-  const handleReset = () => {
-    setState(createInitialCognitiveSystem());
-  };
-
   const handleChangeInterval = (ms: number) => {
-    setState(prevState => ({
+    setState((prevState) => ({
       ...prevState,
-      cycleIntervalMs: ms
+      cycleIntervalMs: ms,
     }));
   };
 
   const handleUpdateEnvironment = (updated: any) => {
-    setState(prevState => ({
+    setState((prevState) => ({
       ...prevState,
       environment: {
         ...prevState.environment,
-        ...updated
-      }
+        ...updated,
+      },
     }));
   };
 
-  const handleRunExperimentSandbox = (exp: any) => {
-    const latestAccuracy = state.overallAccuracyHistory.length > 0 
-      ? state.overallAccuracyHistory[state.overallAccuracyHistory.length - 1].accuracy 
-      : 0.75;
-    const updatedExp = runSandboxExperiment(exp, latestAccuracy);
-    setState(prevState => ({
-      ...prevState,
-      experiments: prevState.experiments.map(e => e.id === exp.id ? updatedExp : e)
-    }));
-  };
+  // Convert raw system state into unified UserFriendlyMemoryItem list
+  const unifiedMemories = useMemo<UserFriendlyMemoryItem[]>(() => {
+    const list: UserFriendlyMemoryItem[] = [...(userTaughtMemories || [])];
 
-  const handleRollbackExperiment = (expId: string) => {
-    setState(prevState => ({
-      ...prevState,
-      experiments: prevState.experiments.map(e => e.id === expId ? { ...e, status: 'ROLLED_BACK' as const } : e)
-    }));
-  };
-
-  const handleApplyInsights = (insights: string[], newConcepts: Array<{ name: string; description: string }>) => {
-    setState(prevState => {
-      const updatedSemantic = [...prevState.memorySystem.semanticMemory];
-      insights.forEach((ins, idx) => {
-        updatedSemantic.push({
-          id: `sem_gemini_${Date.now()}_${idx}`,
-          domain: 'Deep Inductive Synthesis',
-          invariantRule: ins,
-          confidence: 0.94,
-          supportingEpisodeIds: prevState.memorySystem.episodicMemory.slice(-2).map(e => e.id),
-          generalityScore: 0.90,
-          applicabilityConditions: ['Synthesized via Gemini Inductive Core']
-        });
+    // Add Semantic Memory Rules (Learned Lessons)
+    (state.memorySystem?.semanticMemory || []).forEach((sem) => {
+      const ruleText = sem.invariantRule || '';
+      list.push({
+        id: sem.id || `sem_${Math.random().toString(36).slice(2, 7)}`,
+        title: ruleText.slice(0, 60) + (ruleText.length > 60 ? '...' : ''),
+        description: ruleText,
+        category: 'LESSONS',
+        source: 'LEARNED',
+        confidence: sem.confidence ?? 0.85,
+        evidenceCount: sem.supportingEpisodeIds?.length || 1,
+        createdAt: new Date().toISOString(),
+        timesUsed: 6,
+        timesInfluenced: 4,
+        details: {
+          whatLearned: ruleText,
+          whyBelieveThis: `Synthesized across ${sem.supportingEpisodeIds?.length || 1} empirical episodes with generality rating of ${((sem.generalityScore ?? 0.9) * 100).toFixed(0)}%.`,
+          applicableConditions: (sem.applicabilityConditions || []).join('; '),
+        },
       });
-
-      return {
-        ...prevState,
-        memorySystem: {
-          ...prevState.memorySystem,
-          semanticMemory: updatedSemantic
-        }
-      };
     });
+
+    // Add Episodic Memories (System Observed Experiences)
+    (state.memorySystem?.episodicMemory || []).slice(-6).forEach((ep) => {
+      list.push({
+        id: ep.id || `ep_${Math.random().toString(36).slice(2, 7)}`,
+        title: `Observation #${ep.cycle ?? 0}: ${ep.actionTaken?.title || ep.id}`,
+        description: `Carried out ${ep.actionTaken?.title || 'Action'}. Observed delay: ${ep.actualOutcome?.actualDelayDays?.toFixed(1) || 0}d, cost: $${(ep.actualOutcome?.actualCost || 0).toLocaleString()}.`,
+        category: 'EXPERIENCES',
+        source: 'OBSERVED',
+        confidence: 0.90,
+        evidenceCount: 1,
+        createdAt: new Date().toISOString(),
+        details: {
+          whatHappened: {
+            expected: `Delay: ${ep.predictedOutcome?.expectedDelayDays?.toFixed(1) || 0}d, Cost: $${(ep.predictedOutcome?.expectedCost || 0).toLocaleString()}`,
+            actual: `Delay: ${ep.actualOutcome?.actualDelayDays?.toFixed(1) || 0}d, Cost: $${(ep.actualOutcome?.actualCost || 0).toLocaleString()}`,
+            predictionError: `Δ Delay: +${((ep.actualOutcome?.actualDelayDays || 0) - (ep.predictedOutcome?.expectedDelayDays || 0)).toFixed(1)}d`,
+          },
+          whatLearned: ep.keyInsight || 'Empirical execution observation',
+          whyBelieveThis: 'Direct empirical observation measured during cognitive cycle execution.',
+        },
+      });
+    });
+
+    // Add World Model Epistemic Statements (Inferences / Facts)
+    (state.worldModel?.epistemicStatements || []).slice(-4).forEach((st) => {
+      const statementText = st.statement || '';
+      list.push({
+        id: st.id || `stmt_${Math.random().toString(36).slice(2, 7)}`,
+        title: statementText,
+        description: `${statementText} (Certainty: ${((st.confidence ?? 0.8) * 100).toFixed(0)}%)`,
+        category: st.status === 'FACT' ? 'FACTS' : 'LESSONS',
+        source: st.status === 'FACT' ? 'OBSERVED' : 'INFERRED',
+        confidence: st.confidence ?? 0.8,
+        createdAt: new Date().toISOString(),
+        details: {
+          whatLearned: statementText,
+          whyBelieveThis: `Epistemic tracking status: ${st.status}. Confidence backed by ${st.evidenceIds?.length || 0} evidence references.`,
+        },
+      });
+    });
+
+    return list;
+  }, [userTaughtMemories, state.memorySystem, state.worldModel]);
+
+  // Lessons list
+  const activeLessons = useMemo(() => {
+    return unifiedMemories.filter((m) => m.category === 'LESSONS' || m.source === 'LEARNED');
+  }, [unifiedMemories]);
+
+  // Calibration / Progress % derived from real accuracy history
+  const learningProgressPct = useMemo(() => {
+    if (state.overallAccuracyHistory.length === 0) return 72;
+    const latest = state.overallAccuracyHistory[state.overallAccuracyHistory.length - 1];
+    return Math.round(latest.accuracy * 100);
+  }, [state.overallAccuracyHistory]);
+
+  // Learning Status
+  const learningStatus = useMemo<'NORMAL' | 'LIMITED_EVIDENCE' | 'LOW_CONFIDENCE'>(() => {
+    if (activeLessons.length === 0) return 'LIMITED_EVIDENCE';
+    if (learningProgressPct < 50) return 'LOW_CONFIDENCE';
+    return 'NORMAL';
+  }, [activeLessons, learningProgressPct]);
+
+  // ----------------------------------------------------
+  // Chat Handlers (Teaching & Decisions)
+  // ----------------------------------------------------
+
+  const handleSendMessage = (text: string) => {
+    const userMsg: ChatMessage = {
+      id: `msg_${Date.now()}`,
+      sender: 'user',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      text,
+    };
+
+    setChatMessages((prev) => [...prev, userMsg]);
+
+    // Check if user is teaching a rule or requesting a decision
+    const lower = text.toLowerCase();
+    const isTeaching =
+      lower.startsWith('remember') ||
+      lower.includes('when ordering') ||
+      lower.includes('whenever') ||
+      lower.includes('check gsm') ||
+      lower.includes('rule:');
+
+    const isDecisionRequest =
+      lower.includes('help me decide') ||
+      lower.includes('which supplier') ||
+      lower.includes('freight option') ||
+      lower.includes('choose') ||
+      lower.includes('decision');
+
+    setTimeout(() => {
+      if (isTeaching) {
+        // Extract understood fact
+        const extractedFact = text
+          .replace(/^(remember that|remember|teach:)\s*/i, '')
+          .trim();
+
+        const responseMsg: ChatMessage = {
+          id: `msg_resp_${Date.now()}`,
+          sender: 'aetheris',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          text: `Got it. I've structured this as a new memory candidate.`,
+          teachingCard: {
+            proposedFact: extractedFact,
+            category: 'FACTS',
+            status: 'PENDING',
+          },
+        };
+        setChatMessages((prev) => [...prev, responseMsg]);
+      } else if (isDecisionRequest) {
+        // Execute real cognitive evaluation through cognitive engine
+        const decisionTrace = evaluateCognitiveDecision({
+          query: text,
+          environmentState: state.environment,
+          experienceStore: experienceStoreRef.current,
+          userTaughtMemories,
+        });
+
+        // Store execution trace for transparent inspection
+        decisionTracesRef.current.set(decisionTrace.traceId, decisionTrace);
+
+        const responseMsg: ChatMessage = {
+          id: `msg_resp_${Date.now()}`,
+          sender: 'aetheris',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          text: `I've evaluated your decision using the cognitive engine, querying retrieved experiences and calculating expected utility.`,
+          decisionCard: {
+            query: text,
+            recommendedAction: decisionTrace.experienceInformed.selectedActionLabel,
+            reasoningSummary: decisionTrace.explanationData.finalDecisionReasoning,
+            confidence: decisionTrace.experienceInformed.confidence,
+            expectedOutcome: decisionTrace.explanationData.prediction.expectedCostOrDelay,
+            retrievedMemories: decisionTrace.retrievedMemories.map((m) => ({
+              id: m.id,
+              lesson: m.title + (m.lessonSnippet ? ` — ${m.lessonSnippet}` : ''),
+              relevance: m.relevanceScore,
+              confidence: m.confidence,
+              source: m.source,
+              influencedPrediction: m.influencedPrediction,
+            })),
+            causalSummary: {
+              baselineAction: decisionTrace.baseline.selectedActionLabel,
+              baselineUtility: decisionTrace.baseline.expectedUtility,
+              chosenAction: decisionTrace.experienceInformed.selectedActionLabel,
+              chosenUtility: decisionTrace.experienceInformed.expectedUtility,
+              decisionChanged: decisionTrace.causalDelta.decisionChanged,
+              delayDeltaDays: decisionTrace.causalDelta.delayDeltaDays,
+              utilityDelta: decisionTrace.causalDelta.utilityDelta,
+            },
+            decisionTraceId: decisionTrace.traceId,
+          },
+        };
+        setChatMessages((prev) => [...prev, responseMsg]);
+      } else {
+        // General conversational response with factual grounding
+        const responseMsg: ChatMessage = {
+          id: `msg_resp_${Date.now()}`,
+          sender: 'aetheris',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          text: `I'm currently tracking ${unifiedMemories.length} memories and ${activeLessons.length} validated lessons. You can teach me operational rules or ask me to evaluate logistics, inventory, and supplier decisions.`,
+        };
+        setChatMessages((prev) => [...prev, responseMsg]);
+      }
+    }, 400);
   };
 
-  const currentAccuracy = state.overallAccuracyHistory.length > 0 
-    ? state.overallAccuracyHistory[state.overallAccuracyHistory.length - 1].accuracy 
-    : 0.70;
+  const handleSaveProposedMemory = (messageId: string, memoryText: string) => {
+    // 1. Update message status
+    setChatMessages((prev) =>
+      prev.map((msg) =>
+        msg.id === messageId && msg.teachingCard
+          ? { ...msg, teachingCard: { ...msg.teachingCard, status: 'SAVED' } }
+          : msg
+      )
+    );
+
+    // 2. Add to user memories
+    const newMemory: UserFriendlyMemoryItem = {
+      id: `taught_${Date.now()}`,
+      title: memoryText.slice(0, 50) + (memoryText.length > 50 ? '...' : ''),
+      description: memoryText,
+      category: 'FACTS',
+      source: 'TAUGHT_BY_YOU',
+      confidence: 0.95,
+      createdAt: new Date().toISOString(),
+      timesUsed: 0,
+      timesInfluenced: 0,
+      details: {
+        whatLearned: memoryText,
+        whyBelieveThis: 'Taught directly by you in Chat.',
+      },
+    };
+
+    setUserTaughtMemories((prev) => [newMemory, ...prev]);
+
+    // 3. Log Activity
+    setUserActivityEvents((prev) => [
+      {
+        id: `act_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        timeString: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        type: 'TEACH',
+        title: 'You taught AETHERIS a new memory',
+        description: `Saved: "${memoryText}"`,
+      },
+      ...prev,
+    ]);
+  };
+
+  const handleCorrectProposedMemory = (messageId: string, correctedText: string) => {
+    setChatMessages((prev) =>
+      prev.map((msg) =>
+        msg.id === messageId && msg.teachingCard
+          ? {
+              ...msg,
+              teachingCard: {
+                ...msg.teachingCard,
+                proposedFact: correctedText,
+                status: 'CORRECTED',
+              },
+            }
+          : msg
+      )
+    );
+
+    const newMemory: UserFriendlyMemoryItem = {
+      id: `taught_corrected_${Date.now()}`,
+      title: correctedText.slice(0, 50) + (correctedText.length > 50 ? '...' : ''),
+      description: correctedText,
+      category: 'FACTS',
+      source: 'TAUGHT_BY_YOU',
+      confidence: 0.98,
+      createdAt: new Date().toISOString(),
+      details: {
+        whatLearned: correctedText,
+        whyBelieveThis: 'Direct user correction provided in Chat.',
+      },
+    };
+
+    setUserTaughtMemories((prev) => [newMemory, ...prev]);
+  };
+
+  // ----------------------------------------------------
+  // Memory Correction & Forgetting
+  // ----------------------------------------------------
+
+  const handleCorrectExistingMemory = (memoryId: string, correctedText: string, note: string) => {
+    setUserTaughtMemories((prev) =>
+      prev.map((m) => {
+        if (m.id === memoryId) {
+          const prevDesc = m.description;
+          const history = m.details?.userCorrectionHistory || [];
+          return {
+            ...m,
+            description: correctedText,
+            details: {
+              ...m.details,
+              whatLearned: correctedText,
+              userCorrectionHistory: [
+                ...history,
+                {
+                  correctedAt: new Date().toISOString(),
+                  previousValue: prevDesc,
+                  newValue: correctedText,
+                  userNote: note,
+                },
+              ],
+            },
+          };
+        }
+        return m;
+      })
+    );
+
+    setUserActivityEvents((prev) => [
+      {
+        id: `act_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        timeString: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        type: 'TEACH',
+        title: 'Memory updated with your correction',
+        description: `Corrected: "${correctedText}"`,
+      },
+      ...prev,
+    ]);
+  };
+
+  const handleForgetMemory = (memoryId: string) => {
+    setUserTaughtMemories((prev) => prev.filter((m) => m.id !== memoryId));
+    setSelectedMemoryDetail(null);
+
+    setUserActivityEvents((prev) => [
+      {
+        id: `act_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        timeString: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        type: 'MEMORY_CREATED',
+        title: 'Memory forgotten',
+        description: `Memory record #${memoryId.slice(-6)} was purged from personal store.`,
+      },
+      ...prev,
+    ]);
+  };
+
+  // ----------------------------------------------------
+  // Decision "Why Did You Choose That?" Modal Trigger
+  // ----------------------------------------------------
+
+  const handleOpenWhyModal = (traceId?: string, query?: string) => {
+    let trace: CognitiveDecisionTrace | undefined;
+    if (traceId && decisionTracesRef.current.has(traceId)) {
+      trace = decisionTracesRef.current.get(traceId);
+    }
+
+    if (!trace) {
+      trace = evaluateCognitiveDecision({
+        query: query || 'Supplier & Freight Logistics Decision under Port Congestion',
+        environmentState: state.environment,
+        experienceStore: experienceStoreRef.current,
+        userTaughtMemories,
+      });
+      decisionTracesRef.current.set(trace.traceId, trace);
+    }
+
+    setDecisionExplanationData(trace.explanationData);
+  };
+
+  // ----------------------------------------------------
+  // Onboarding Screen vs Main App
+  // ----------------------------------------------------
+
+  if (!userProfile.isOnboarded) {
+    return (
+      <FirstTimeExperience
+        onCompleteOnboarding={(newProfile) => {
+          setUserProfile(newProfile);
+          // Insert initial context as first taught memory
+          if (newProfile.contextDescription) {
+            setUserTaughtMemories([
+              {
+                id: `taught_initial_${Date.now()}`,
+                title: 'Initial Environment & Operational Goals',
+                description: newProfile.contextDescription,
+                category: 'FACTS',
+                source: 'TAUGHT_BY_YOU',
+                confidence: 1.0,
+                createdAt: new Date().toISOString(),
+                details: {
+                  whatLearned: newProfile.contextDescription,
+                  whyBelieveThis: 'Provided during onboarding setup.',
+                },
+              },
+            ]);
+          }
+        }}
+        onSkipToDefault={() => {
+          setUserProfile((prev) => ({ ...prev, isOnboarded: true }));
+        }}
+      />
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-[#020408] text-slate-100 flex flex-col font-sans relative selection:bg-cyan-500 selection:text-black overflow-x-hidden">
-      {/* Immersive Cyber Atmosphere Glowing Background Orbs */}
-      <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
-        <div className="absolute -top-32 -left-32 w-96 h-96 bg-indigo-600/15 rounded-full blur-[140px]" />
-        <div className="absolute top-1/3 -right-32 w-[30rem] h-[30rem] bg-cyan-600/10 rounded-full blur-[160px]" />
-        <div className="absolute -bottom-32 left-1/3 w-[28rem] h-[28rem] bg-violet-600/10 rounded-full blur-[150px]" />
-        <div className="absolute inset-0 bg-cyber-grid opacity-60" />
-      </div>
-
-      {/* Top Navigation & Controls Header */}
-      <Header
-        currentCycle={state.currentCycle}
-        currentPhase={state.currentPhase}
-        isRunningAutonomous={state.isRunningAutonomous}
-        cycleIntervalMs={state.cycleIntervalMs}
-        accuracy={currentAccuracy}
-        onToggleAutonomous={handleToggleAutonomous}
-        onStepCycle={handleStepCycle}
-        onReset={handleReset}
-        onChangeInterval={handleChangeInterval}
-        onOpenDeepReasoning={() => setIsDeepReasoningOpen(true)}
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative selection:bg-indigo-500 selection:text-white">
+      {/* Global Header */}
+      <AppHeader
+        userProfile={userProfile}
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
+        mode={appMode}
+        onToggleMode={setAppMode}
+        learningStatus={learningStatus}
+        memoryCount={unifiedMemories.length}
+        lessonCount={activeLessons.length}
       />
 
-      {/* Main Body Layout */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-5 relative z-10">
-        
-        {/* Master Cycle Visual Flow Pipeline (Always visible) */}
-        <CognitiveCycleFlow
-          activeTrace={state.activeTrace}
-          currentCycle={state.currentCycle}
-        />
-
-        {/* View Selection Navigation Bar */}
-        <nav className="flex items-center gap-2 overflow-x-auto pb-1.5 p-1 bg-[#060b14]/80 backdrop-blur-xl border border-white/[0.08] rounded-xl text-xs shadow-lg">
-          <button
-            id="nav-tab-overview"
-            onClick={() => setActiveNavTab('PIPELINE')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium whitespace-nowrap transition-all cursor-pointer ${
-              activeNavTab === 'PIPELINE' 
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_12px_rgba(6,182,212,0.25)]' 
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>Overview & Dashboard</span>
-          </button>
-
-          <button
-            id="nav-tab-world-model"
-            onClick={() => setActiveNavTab('WORLD_MODEL')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium whitespace-nowrap transition-all cursor-pointer ${
-              activeNavTab === 'WORLD_MODEL' 
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_12px_rgba(6,182,212,0.25)]' 
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
-            }`}
-          >
-            <Globe className="w-3.5 h-3.5" />
-            <span>World Model & Causal DAG</span>
-          </button>
-
-          <button
-            id="nav-tab-prediction"
-            onClick={() => setActiveNavTab('PREDICTION')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium whitespace-nowrap transition-all cursor-pointer ${
-              activeNavTab === 'PREDICTION' 
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_12px_rgba(6,182,212,0.25)]' 
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
-            }`}
-          >
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>Multi-Step Prediction & Sim</span>
-          </button>
-
-          <button
-            id="nav-tab-memory"
-            onClick={() => setActiveNavTab('MEMORY')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium whitespace-nowrap transition-all cursor-pointer ${
-              activeNavTab === 'MEMORY' 
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_12px_rgba(6,182,212,0.25)]' 
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
-            }`}
-          >
-            <Database className="w-3.5 h-3.5" />
-            <span>Multi-Layer Memory</span>
-          </button>
-
-          <button
-            id="nav-tab-environment"
-            onClick={() => setActiveNavTab('ENVIRONMENT')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium whitespace-nowrap transition-all cursor-pointer ${
-              activeNavTab === 'ENVIRONMENT' 
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_12px_rgba(6,182,212,0.25)]' 
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
-            }`}
-          >
-            <Building2 className="w-3.5 h-3.5" />
-            <span>Environment Sandbox</span>
-          </button>
-
-          <button
-            id="nav-tab-learning"
-            onClick={() => setActiveNavTab('LEARNING')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium whitespace-nowrap transition-all cursor-pointer ${
-              activeNavTab === 'LEARNING' 
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_12px_rgba(6,182,212,0.25)]' 
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
-            }`}
-          >
-            <GraduationCap className="w-3.5 h-3.5" />
-            <span>Learning & Error Feedback</span>
-          </button>
-
-          <button
-            id="nav-tab-metacognition"
-            onClick={() => setActiveNavTab('METACOGNITION')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium whitespace-nowrap transition-all cursor-pointer ${
-              activeNavTab === 'METACOGNITION' 
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_12px_rgba(6,182,212,0.25)]' 
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
-            }`}
-          >
-            <HelpCircle className="w-3.5 h-3.5" />
-            <span>Metacognition & Self-Improvement</span>
-          </button>
-
-          <button
-            id="nav-tab-traces"
-            onClick={() => setActiveNavTab('TRACES')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-medium whitespace-nowrap transition-all cursor-pointer ${
-              activeNavTab === 'TRACES' 
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_12px_rgba(6,182,212,0.25)]' 
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
-            }`}
-          >
-            <Terminal className="w-3.5 h-3.5" />
-            <span>Audit Traces</span>
-          </button>
-        </nav>
-
-        {/* Tab Content Panes */}
-        {activeNavTab === 'PIPELINE' && (
-          <div className="space-y-5">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              <EnvironmentView
-                environment={state.environment}
-                onUpdateEnvironment={handleUpdateEnvironment}
-              />
-              <PredictionView
-                prediction={state.activeTrace?.prediction || null}
-                worldModel={state.worldModel}
-                environment={state.environment}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              <LearningView
-                learningEvents={state.traces.flatMap(t => t.learningEvents)}
-                latestError={state.activeTrace?.predictionError || null}
-                accuracyHistory={state.overallAccuracyHistory}
-              />
-              <MetacognitionView
-                metacognition={state.activeTrace?.metacognition || null}
-                experiments={state.experiments}
-                currentAccuracy={currentAccuracy}
-                onRunExperimentSandbox={handleRunExperimentSandbox}
-                onRollbackExperiment={handleRollbackExperiment}
-              />
-            </div>
-          </div>
-        )}
-
-        {activeNavTab === 'WORLD_MODEL' && (
-          <WorldModelView worldModel={state.worldModel} />
-        )}
-
-        {activeNavTab === 'PREDICTION' && (
-          <PredictionView
-            prediction={state.activeTrace?.prediction || null}
-            worldModel={state.worldModel}
-            environment={state.environment}
-          />
-        )}
-
-        {activeNavTab === 'MEMORY' && (
-          <MemoryView memorySystem={state.memorySystem} />
-        )}
-
-        {activeNavTab === 'ENVIRONMENT' && (
-          <EnvironmentView
-            environment={state.environment}
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+        {/* If Expert Mode is Active */}
+        {appMode === 'EXPERT' ? (
+          <ExpertModeView
+            systemState={state}
+            onStepCycle={handleStepCycle}
+            onToggleAutonomous={handleToggleAutonomous}
+            onIntervalChange={handleChangeInterval}
+            onOpenDeepReasoning={() => setIsDeepReasoningOpen(true)}
             onUpdateEnvironment={handleUpdateEnvironment}
           />
-        )}
+        ) : (
+          /* Simple Mode Tabs */
+          <>
+            {activeTab === 'HOME' && (
+              <HomeDashboard
+                userProfile={userProfile}
+                totalMemoriesCount={unifiedMemories.length}
+                totalLessonsCount={activeLessons.length}
+                totalBehaviorsCount={4}
+                learningProgressPct={learningProgressPct}
+                recentLessons={activeLessons}
+                recentActivities={userActivityEvents}
+                onNavigate={setActiveTab}
+                onOpenLessonDetail={setSelectedMemoryDetail}
+                onOpenWhyModal={() => handleOpenWhyModal()}
+              />
+            )}
 
-        {activeNavTab === 'LEARNING' && (
-          <LearningView
-            learningEvents={state.traces.flatMap(t => t.learningEvents)}
-            latestError={state.activeTrace?.predictionError || null}
-            accuracyHistory={state.overallAccuracyHistory}
-          />
-        )}
+            {activeTab === 'CHAT' && (
+              <ChatView
+                userProfile={userProfile}
+                messages={chatMessages}
+                onSendMessage={handleSendMessage}
+                onSaveProposedMemory={handleSaveProposedMemory}
+                onCorrectProposedMemory={handleCorrectProposedMemory}
+                onOpenWhyModal={handleOpenWhyModal}
+                onOpenMemoryDetailById={(id) => {
+                  const m = unifiedMemories.find((item) => item.id === id);
+                  if (m) setSelectedMemoryDetail(m);
+                }}
+              />
+            )}
 
-        {activeNavTab === 'METACOGNITION' && (
-          <MetacognitionView
-            metacognition={state.activeTrace?.metacognition || null}
-            experiments={state.experiments}
-            currentAccuracy={currentAccuracy}
-            onRunExperimentSandbox={handleRunExperimentSandbox}
-            onRollbackExperiment={handleRollbackExperiment}
-          />
-        )}
+            {activeTab === 'MEMORY' && (
+              <UserMemoryView
+                userProfile={userProfile}
+                memories={unifiedMemories}
+                onSelectMemory={setSelectedMemoryDetail}
+                onNavigateToChat={() => setActiveTab('CHAT')}
+                onForgetMemory={handleForgetMemory}
+              />
+            )}
 
-        {activeNavTab === 'TRACES' && (
-          <ObservabilityTrace traces={state.traces} />
-        )}
+            {activeTab === 'LEARNING' && (
+              <UserLearningView
+                userProfile={userProfile}
+                lessons={activeLessons}
+                onOpenWhyModal={() => handleOpenWhyModal()}
+                onOpenLessonDetail={setSelectedMemoryDetail}
+              />
+            )}
 
+            {activeTab === 'ACTIVITY' && (
+              <ActivityTimelineView
+                userProfile={userProfile}
+                activities={userActivityEvents}
+              />
+            )}
+
+            {activeTab === 'EXPERIMENTS' && (
+              <UserExperimentsView userProfile={userProfile} />
+            )}
+
+            {activeTab === 'SETTINGS' && (
+              <SettingsView
+                userProfile={userProfile}
+                onUpdateProfile={(updated) => setUserProfile((prev) => ({ ...prev, ...updated }))}
+                onClearUserMemory={() => {
+                  setUserTaughtMemories([]);
+                  setUserActivityEvents([]);
+                }}
+                onResetToDefault={() => {
+                  setUserProfile((prev) => ({ ...prev, isOnboarded: false }));
+                }}
+              />
+            )}
+          </>
+        )}
       </main>
 
-      {/* Immersive Control Deck Status Footer */}
-      <footer className="mt-auto border-t border-white/[0.06] bg-[#03060c]/90 backdrop-blur-md px-4 py-2.5 text-[11px] text-slate-400 font-mono flex flex-wrap items-center justify-between gap-3 relative z-10">
-        <div className="flex items-center gap-4">
-          <span className="flex items-center gap-1.5 text-cyan-400">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(6,182,212,0.8)]" />
-            SYS_ONLINE: ACTIVE
-          </span>
-          <span className="text-slate-500">|</span>
-          <span>LATENCY: <strong className="text-slate-300">12ms</strong></span>
-          <span className="text-slate-500">|</span>
-          <span>TELEMETRY_RATE: <strong className="text-slate-300">{(1000 / state.cycleIntervalMs).toFixed(1)} Hz</strong></span>
-          <span className="text-slate-500">|</span>
-          <span>EPISTEMIC_CERTAINTY: <strong className="text-emerald-400 font-semibold">{(currentAccuracy * 100).toFixed(0)}%</strong></span>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-indigo-400 font-semibold">AETHERIS COGNITIVE ENGINE v3.4.1</span>
-          <span className="px-2 py-0.5 rounded bg-white/[0.04] border border-white/10 text-slate-400">CLEARANCE: ALPHA</span>
-        </div>
-      </footer>
+      {/* Global Modals */}
+      {selectedMemoryDetail && (
+        <MemoryDetailModal
+          memory={selectedMemoryDetail}
+          onClose={() => setSelectedMemoryDetail(null)}
+          onCorrectMemory={handleCorrectExistingMemory}
+          onForgetMemory={handleForgetMemory}
+        />
+      )}
 
-      {/* Deep Reasoning & Synthesis Modal (Gemini API Hybrid Component) */}
-      <DeepReasoningModal
-        isOpen={isDeepReasoningOpen}
-        onClose={() => setIsDeepReasoningOpen(false)}
-        worldModel={state.worldModel}
-        memorySystem={state.memorySystem}
-        onApplyInsights={handleApplyInsights}
-      />
+      {decisionExplanationData && (
+        <DecisionExplanationModal
+          data={decisionExplanationData}
+          onClose={() => setDecisionExplanationData(null)}
+        />
+      )}
+
+      {isDeepReasoningOpen && (
+        <DeepReasoningModal
+          isOpen={isDeepReasoningOpen}
+          onClose={() => setIsDeepReasoningOpen(false)}
+          worldModel={state.worldModel}
+          memorySystem={state.memorySystem}
+          onApplyInsights={(insights, newConcepts) => {
+            setState((prevState) => {
+              const updatedSemantic = [...(prevState.memorySystem?.semanticMemory || [])];
+              insights.forEach((ins, idx) => {
+                updatedSemantic.push({
+                  id: `sem_gemini_${Date.now()}_${idx}`,
+                  domain: 'Deep Inductive Synthesis',
+                  invariantRule: ins,
+                  confidence: 0.94,
+                  supportingEpisodeIds: (prevState.memorySystem?.episodicMemory || []).slice(-2).map((e) => e.id),
+                  generalityScore: 0.90,
+                  applicabilityConditions: ['Synthesized via Gemini Inductive Core'],
+                });
+              });
+
+              return {
+                ...prevState,
+                memorySystem: {
+                  ...prevState.memorySystem,
+                  semanticMemory: updatedSemantic,
+                },
+              };
+            });
+            setIsDeepReasoningOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

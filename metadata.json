@@ -1,6 +1,6 @@
 {
-  "name": "AGI Cognitive Architecture System",
-  "description": "Continuous general intelligence architecture with world modeling, multi-layer memory, probabilistic prediction, causal reasoning, prediction error feedback loops, and controlled self-improvement experiments.",
+  "name": "AETHERIS — Your Learning Machine",
+  "description": "Continuous experiential learning system with multi-layer memory, probabilistic prediction, empirical error feedback loops, transparent causal reasoning, and user teaching workflows.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

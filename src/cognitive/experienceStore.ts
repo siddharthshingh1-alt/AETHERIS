@@ -8,6 +8,11 @@
  * - CONFIDENCE (statistical grounding)
  */
 
+import { PersistenceAdapter, LocalStorageAdapter } from './persistence';
+
+export type CognitiveMemoryType = 'EXPERIENCE' | 'FACT' | 'PREFERENCE' | 'HYPOTHESIS_OR_RULE' | 'LESSON';
+export type CognitiveEvidenceStatus = 'OBSERVED_EVENT' | 'USER_HYPOTHESIS' | 'EMPIRICALLY_VALIDATED' | 'USER_PREFERENCE' | 'FACT';
+
 export interface StructuredLesson {
   observedFact: string;
   interpretation: string;
@@ -21,7 +26,7 @@ export interface StructuredLesson {
 export interface ExperienceRecord {
   experienceId: string;
   taskId: string;
-  taskFamily: string; // 'RESOURCE_ALLOCATION' | 'SUPPLIER_SELECTION' | 'SEQUENTIAL_DECISION'
+  taskFamily: string; // 'RESOURCE_ALLOCATION' | 'SUPPLIER_SELECTION' | 'SEQUENTIAL_DECISION' | 'GENERAL'
   context: Record<string, any>;
   prediction: {
     predictedDelay?: number;
@@ -70,11 +75,23 @@ export interface ExperienceRecord {
   };
   createdAt: string;
   sourceExperimentId: string;
+  
+  // Extended User Teaching & Memory Architecture Fields
+  memoryType?: CognitiveMemoryType;
+  source?: 'USER_TAUGHT' | 'BENCHMARK' | 'AUTONOMOUS_CYCLE' | 'OBSERVED';
+  targetEntity?: string;
+  evidenceStatus?: CognitiveEvidenceStatus;
+  supportingEvidenceCount?: number;
+  contradictingEvidenceCount?: number;
+  userTeachingRawText?: string;
+  relevanceScore?: number; // Cached or runtime relevance
 }
 
 export interface ExperienceQuery {
   taskFamily?: string;
+  targetEntity?: string;
   contextFeatures?: Record<string, any>;
+  memoryTypes?: CognitiveMemoryType[];
   limit?: number;
   minConfidence?: number;
 }
@@ -82,9 +99,29 @@ export interface ExperienceQuery {
 export class ExperienceStore {
   private experiences: Map<string, ExperienceRecord> = new Map();
   private experimentId: string;
+  private persistenceAdapter?: PersistenceAdapter<ExperienceRecord[]>;
 
-  constructor(experimentId: string = 'exp_default') {
+  constructor(experimentId: string = 'exp_default', persistenceAdapter?: PersistenceAdapter<ExperienceRecord[]>) {
     this.experimentId = experimentId;
+    this.persistenceAdapter = persistenceAdapter;
+
+    // Load from persistence if available
+    if (this.persistenceAdapter) {
+      const loaded = this.persistenceAdapter.load();
+      if (Array.isArray(loaded) && loaded.length > 0) {
+        loaded.forEach((rec) => {
+          if (rec.experienceId) {
+            this.experiences.set(rec.experienceId, rec);
+          }
+        });
+      }
+    }
+  }
+
+  private persist(): void {
+    if (this.persistenceAdapter) {
+      this.persistenceAdapter.save(Array.from(this.experiences.values()));
+    }
   }
 
   public getExperimentId(): string {
@@ -96,13 +133,38 @@ export class ExperienceStore {
   }
 
   /**
-   * Adds a structured experience record to the store.
+   * Adds a structured experience record to the store and persists it.
    */
   public addExperience(record: ExperienceRecord): void {
     if (!record.experienceId) {
       record.experienceId = `exp_rec_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
     }
+    if (!record.memoryType) {
+      record.memoryType = record.source === 'USER_TAUGHT' ? 'EXPERIENCE' : 'LESSON';
+    }
     this.experiences.set(record.experienceId, { ...record });
+    this.persist();
+  }
+
+  /**
+   * Updates an existing experience record.
+   */
+  public updateExperience(record: ExperienceRecord): void {
+    if (this.experiences.has(record.experienceId)) {
+      this.experiences.set(record.experienceId, { ...record });
+      this.persist();
+    }
+  }
+
+  /**
+   * Removes an experience by ID.
+   */
+  public removeExperience(experienceId: string): boolean {
+    const deleted = this.experiences.delete(experienceId);
+    if (deleted) {
+      this.persist();
+    }
+    return deleted;
   }
 
   /**
@@ -122,7 +184,7 @@ export class ExperienceStore {
 
   /**
    * Retrieves relevant previous experiences before making a prediction.
-   * Uses deterministic task family and feature similarity matching.
+   * Evaluates task family, target entity, context features with distance scaling, and confidence.
    */
   public retrieveRelevantExperiences(query: ExperienceQuery): ExperienceRecord[] {
     const limit = query.limit ?? 5;
@@ -132,49 +194,83 @@ export class ExperienceStore {
     const scored = all.map(exp => {
       let score = 0;
 
-      // Task family match (+0.5)
+      // 1. Task family match (+0.4)
       if (query.taskFamily && exp.taskFamily === query.taskFamily) {
-        score += 0.5;
+        score += 0.4;
+      } else if (!query.taskFamily || exp.taskFamily === 'GENERAL') {
+        score += 0.2;
       }
 
-      // Feature matching
-      if (query.contextFeatures && exp.predictionFeatures) {
-        let matchingFeatures = 0;
-        let totalQueried = 0;
+      // 2. Target Entity match (+0.3)
+      if (query.targetEntity) {
+        const qTarget = query.targetEntity.toLowerCase();
+        const expTarget = (exp.targetEntity || exp.selectedAction?.targetEntity || '').toLowerCase();
+        const expAction = (exp.selectedAction?.actionType || '').toLowerCase();
+        if (expTarget.includes(qTarget) || qTarget.includes(expTarget) || expAction.includes(qTarget)) {
+          score += 0.3;
+        }
+      }
 
-        for (const [key, val] of Object.entries(query.contextFeatures)) {
-          totalQueried++;
+      // 3. Feature matching with distance scaling
+      if (query.contextFeatures && exp.predictionFeatures) {
+        let featureScore = 0;
+        let featuresCompared = 0;
+
+        for (const [key, queryVal] of Object.entries(query.contextFeatures)) {
+          if (queryVal === undefined || queryVal === null) continue;
+          
           if (exp.predictionFeatures[key] !== undefined) {
+            featuresCompared++;
             const expVal = exp.predictionFeatures[key];
-            if (expVal === val) {
-              matchingFeatures += 1.0;
-            } else if (typeof expVal === 'number' && typeof val === 'number') {
-              const diffRatio = Math.abs(expVal - val) / Math.max(1, Math.abs(val));
-              if (diffRatio < 0.25) {
-                matchingFeatures += 0.7;
-              } else if (diffRatio < 0.5) {
-                matchingFeatures += 0.3;
+
+            if (expVal === queryVal) {
+              featureScore += 1.0;
+            } else if (typeof expVal === 'number' && typeof queryVal === 'number') {
+              const diffRatio = Math.abs(expVal - queryVal) / Math.max(0.1, Math.abs(queryVal));
+              if (diffRatio < 0.2) {
+                featureScore += 0.9;
+              } else if (diffRatio < 0.4) {
+                featureScore += 0.6;
+              } else if (diffRatio < 0.7) {
+                featureScore += 0.2;
+              } else {
+                // Large distance mismatch (e.g. demandVolatility 0.15 vs 0.45): contextual mismatch penalty
+                featureScore -= 0.4;
               }
+            } else if (typeof expVal === 'boolean' && typeof queryVal === 'boolean') {
+              featureScore += expVal === queryVal ? 1.0 : -0.3;
             }
           }
         }
 
-        if (totalQueried > 0) {
-          score += 0.5 * (matchingFeatures / totalQueried);
+        if (featuresCompared > 0) {
+          const normalizedFeatureScore = Math.max(0, featureScore / featuresCompared);
+          score += 0.4 * normalizedFeatureScore;
         }
       }
 
-      // Weight by lesson confidence
-      score *= (0.5 + 0.5 * (exp.lesson.confidence || 0.5));
+      // 4. Memory Type Filter (if specified)
+      if (query.memoryTypes && query.memoryTypes.length > 0 && exp.memoryType) {
+        if (!query.memoryTypes.includes(exp.memoryType)) {
+          score *= 0.5;
+        }
+      }
+
+      // 5. Weight by lesson confidence or record confidence
+      const recordConfidence = exp.lesson?.confidence || exp.confidence || 0.7;
+      score *= (0.4 + 0.6 * recordConfidence);
 
       return { exp, score };
     });
 
     return scored
-      .filter(item => item.score > 0.1 && (item.exp.lesson.confidence || 0) >= minConfidence)
+      .filter(item => item.score > 0.15 && (item.exp.lesson?.confidence || item.exp.confidence || 0) >= minConfidence)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
-      .map(item => ({ ...item.exp }));
+      .map(item => ({
+        ...item.exp,
+        relevanceScore: Math.min(0.98, Math.round(item.score * 100) / 100),
+      }));
   }
 
   /**
@@ -182,6 +278,7 @@ export class ExperienceStore {
    */
   public clear(): void {
     this.experiences.clear();
+    this.persist();
   }
 
   /**
@@ -207,3 +304,4 @@ export class ExperienceStore {
       .join('\n');
   }
 }
+

@@ -47,9 +47,9 @@ export const DeepReasoningModal: React.FC<DeepReasoningModalProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           activeHypothesis: customPrompt,
-          worldEntities: worldModel.entities,
-          causalEdges: worldModel.causalEdges,
-          recentEpisodes: memorySystem.episodicMemory.slice(-4)
+          worldEntities: worldModel?.entities || {},
+          causalEdges: worldModel?.causalEdges || [],
+          recentEpisodes: (memorySystem?.episodicMemory || []).slice(-4)
         })
       });
       const data = await res.json();
