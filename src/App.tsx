@@ -12,8 +12,10 @@ import {
   CognitiveDecisionTrace,
 } from './cognitive/chatDecisionEngine';
 import { ExperienceStore, ExperienceRecord } from './cognitive/experienceStore';
+import { KnowledgeCore } from './cognitive/knowledgeCore';
 import { LocalStorageAdapter } from './cognitive/persistence';
 import { parseUserTeaching, detectTeachingIntent } from './cognitive/teachingParser';
+import { parseGeneralTeaching, detectGeneralTeachingIntent } from './cognitive/conceptTeachingParser';
 
 // Redesigned User-Friendly Components
 import { FirstTimeExperience } from './components/FirstTimeExperience';
@@ -72,13 +74,20 @@ export default function App() {
   const [decisionExplanationData, setDecisionExplanationData] = useState<DecisionExplanationData | null>(null);
   const [isDeepReasoningOpen, setIsDeepReasoningOpen] = useState<boolean>(false);
 
-  // 5. Cognitive Experience Store (Single source of truth with LocalStorage persistence)
+  // 5. Cognitive Experience Store & Knowledge Core (Single source of truth with LocalStorage persistence)
   const [experienceStoreRevision, setExperienceStoreRevision] = useState<number>(0);
   const experienceStoreRef = useRef<ExperienceStore | null>(null);
   if (!experienceStoreRef.current) {
     experienceStoreRef.current = createDefaultExperienceStore(
       'aria_live_store',
       new LocalStorageAdapter<ExperienceRecord[]>('aetheris_cognitive_experiences')
+    );
+  }
+  const knowledgeCoreRef = useRef<KnowledgeCore | null>(null);
+  if (!knowledgeCoreRef.current) {
+    knowledgeCoreRef.current = new KnowledgeCore(
+      'aetheris_knowledge_core_app',
+      new LocalStorageAdapter<any>('aetheris_knowledge_core_store')
     );
   }
   const decisionTracesRef = useRef<Map<string, CognitiveDecisionTrace>>(new Map());
@@ -384,9 +393,21 @@ export default function App() {
       )
     );
 
-    // 2. Parse and add to persistent ExperienceStore
+    // 2. Parse and add to persistent ExperienceStore & KnowledgeCore
     const parsed = parseUserTeaching(memoryText);
     experienceStoreRef.current?.addExperience(parsed.experienceRecord);
+    
+    // Also parse conceptual teaching if applicable
+    if (detectGeneralTeachingIntent(memoryText)) {
+      const generalParsed = parseGeneralTeaching(memoryText);
+      if (generalParsed.concept) {
+        knowledgeCoreRef.current?.createOrUpdateConcept(generalParsed.concept);
+      }
+      if (generalParsed.relationship) {
+        knowledgeCoreRef.current?.addRelationship(generalParsed.relationship);
+      }
+    }
+
     setExperienceStoreRevision((v) => v + 1);
 
     // 3. Log Activity
@@ -561,6 +582,7 @@ export default function App() {
         {appMode === 'EXPERT' ? (
           <ExpertModeView
             systemState={state}
+            knowledgeCore={knowledgeCoreRef.current || undefined}
             onStepCycle={handleStepCycle}
             onToggleAutonomous={handleToggleAutonomous}
             onIntervalChange={handleChangeInterval}
@@ -604,6 +626,7 @@ export default function App() {
               <UserMemoryView
                 userProfile={userProfile}
                 memories={unifiedMemories}
+                knowledgeCore={knowledgeCoreRef.current || undefined}
                 onSelectMemory={setSelectedMemoryDetail}
                 onNavigateToChat={() => setActiveTab('CHAT')}
                 onForgetMemory={handleForgetMemory}

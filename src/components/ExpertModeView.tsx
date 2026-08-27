@@ -12,6 +12,7 @@ import {
   TrendingUp,
   Cpu,
   FileCode,
+  BookOpen,
 } from 'lucide-react';
 import { CognitiveSystemState } from '../cognitive/engine';
 import { CognitiveCycleFlow } from './CognitiveCycleFlow';
@@ -22,9 +23,12 @@ import { EnvironmentView } from './EnvironmentView';
 import { LearningView } from './LearningView';
 import { MetacognitionView } from './MetacognitionView';
 import { ObservabilityTrace } from './ObservabilityTrace';
+import { KnowledgeFoundationView } from './KnowledgeFoundationView';
+import { KnowledgeCore } from '../cognitive/knowledgeCore';
 
 interface ExpertModeViewProps {
   systemState: CognitiveSystemState;
+  knowledgeCore?: KnowledgeCore;
   onStepCycle: () => void;
   onToggleAutonomous: () => void;
   onIntervalChange: (ms: number) => void;
@@ -34,6 +38,7 @@ interface ExpertModeViewProps {
 
 export const ExpertModeView: React.FC<ExpertModeViewProps> = ({
   systemState,
+  knowledgeCore,
   onStepCycle,
   onToggleAutonomous,
   onIntervalChange,
@@ -41,11 +46,12 @@ export const ExpertModeView: React.FC<ExpertModeViewProps> = ({
   onUpdateEnvironment,
 }) => {
   const [activeExpertTab, setActiveExpertTab] = useState<
-    'pipeline' | 'worldModel' | 'prediction' | 'memory' | 'environment' | 'learning' | 'metacognition' | 'traces'
+    'pipeline' | 'knowledgeCore' | 'worldModel' | 'prediction' | 'memory' | 'environment' | 'learning' | 'metacognition' | 'traces'
   >('pipeline');
 
   const expertTabs = [
     { id: 'pipeline', label: '13-Stage Pipeline', icon: Activity },
+    { id: 'knowledgeCore', label: 'General Knowledge Core', icon: BookOpen },
     { id: 'worldModel', label: 'Causal DAG & Epistemics', icon: Globe },
     { id: 'prediction', label: 'Probabilistic Trajectories', icon: Cpu },
     { id: 'memory', label: 'Multi-Layer Memory', icon: Brain },
@@ -138,6 +144,9 @@ export const ExpertModeView: React.FC<ExpertModeViewProps> = ({
       <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6">
         {activeExpertTab === 'pipeline' && (
           <CognitiveCycleFlow trace={systemState.activeTrace} />
+        )}
+        {activeExpertTab === 'knowledgeCore' && knowledgeCore && (
+          <KnowledgeFoundationView knowledgeCore={knowledgeCore} />
         )}
         {activeExpertTab === 'worldModel' && (
           <WorldModelView worldModel={systemState.worldModel} />

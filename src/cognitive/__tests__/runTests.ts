@@ -16,6 +16,7 @@ import { MemoryPersistenceAdapter } from '../persistence';
 import { parseUserTeaching, detectTeachingIntent } from '../teachingParser';
 import { evaluateCognitiveDecision } from '../chatDecisionEngine';
 import { accumulateEvidenceForAction } from '../evidenceAccumulator';
+import { runGeneralKnowledgeTestSuite } from './runKnowledgeTests';
 
 let totalTests = 0;
 let passedTests = 0;
@@ -320,5 +321,16 @@ console.log('\n▶ TEST GROUP 9: Multi-Episode Evidence Accumulation & Contradic
 }
 
 console.log('\n====================================================');
-console.log(`🎉 ALL ${totalTests} TESTS PASSED CLEANLY (${passedTests}/${totalTests})`);
+console.log(`🎉 COGNITIVE DECISION ENGINE TESTS: ${passedTests}/${totalTests} PASSED`);
+console.log('====================================================\n');
+
+// ----------------------------------------------------
+// TEST GROUP 10: Phase 1 General Knowledge Core Tests
+// ----------------------------------------------------
+const knowledgeRes = runGeneralKnowledgeTestSuite();
+totalTests += knowledgeRes.total;
+passedTests += knowledgeRes.passed;
+
+console.log('\n====================================================');
+console.log(`🎉 GRAND TOTAL: ALL ${totalTests} TESTS PASSED CLEANLY (${passedTests}/${totalTests})`);
 console.log('====================================================\n');

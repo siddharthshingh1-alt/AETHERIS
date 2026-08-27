@@ -12,10 +12,13 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { MemoryCategory, UserFriendlyMemoryItem, UserProfile } from '../types/userState';
+import { KnowledgeFoundationView } from './KnowledgeFoundationView';
+import { KnowledgeCore } from '../cognitive/knowledgeCore';
 
 interface UserMemoryViewProps {
   userProfile: UserProfile;
   memories: UserFriendlyMemoryItem[];
+  knowledgeCore?: KnowledgeCore;
   onSelectMemory: (memory: UserFriendlyMemoryItem) => void;
   onNavigateToChat: () => void;
   onForgetMemory: (memoryId: string) => void;
@@ -24,15 +27,17 @@ interface UserMemoryViewProps {
 export const UserMemoryView: React.FC<UserMemoryViewProps> = ({
   userProfile,
   memories,
+  knowledgeCore,
   onSelectMemory,
   onNavigateToChat,
   onForgetMemory,
 }) => {
-  const [selectedCategory, setSelectedCategory] = useState<MemoryCategory>('ALL');
+  const [selectedCategory, setSelectedCategory] = useState<MemoryCategory | 'KNOWLEDGE_CORE'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
 
-  const categories: Array<{ id: MemoryCategory; label: string }> = [
+  const categories: Array<{ id: MemoryCategory | 'KNOWLEDGE_CORE'; label: string }> = [
     { id: 'ALL', label: 'All Memories' },
+    { id: 'KNOWLEDGE_CORE', label: 'General Knowledge Core' },
     { id: 'EXPERIENCES', label: 'Experiences' },
     { id: 'FACTS', label: 'Facts' },
     { id: 'LESSONS', label: 'Lessons' },
@@ -118,6 +123,10 @@ export const UserMemoryView: React.FC<UserMemoryViewProps> = ({
             const count =
               cat.id === 'ALL'
                 ? memories.length
+                : cat.id === 'KNOWLEDGE_CORE'
+                ? knowledgeCore
+                  ? knowledgeCore.getAllConcepts().length
+                  : 0
                 : memories.filter((m) => m.category === cat.id).length;
             const isSelected = selectedCategory === cat.id;
             return (
@@ -156,8 +165,10 @@ export const UserMemoryView: React.FC<UserMemoryViewProps> = ({
         </div>
       </div>
 
-      {/* Memory Cards Grid */}
-      {filteredMemories.length === 0 ? (
+      {/* Memory Cards Grid or Knowledge Core View */}
+      {selectedCategory === 'KNOWLEDGE_CORE' && knowledgeCore ? (
+        <KnowledgeFoundationView knowledgeCore={knowledgeCore} />
+      ) : filteredMemories.length === 0 ? (
         <div className="bg-slate-900 border border-slate-800 p-12 rounded-2xl text-center space-y-3">
           <Brain className="w-8 h-8 text-slate-600 mx-auto" />
           <div className="text-sm font-medium text-slate-300">
