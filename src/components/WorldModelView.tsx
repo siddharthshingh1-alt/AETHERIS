@@ -22,11 +22,12 @@ export const WorldModelView: React.FC<WorldModelViewProps> = ({ worldModel }) =>
   const [activeTab, setActiveTab] = useState<'ENTITIES' | 'CAUSAL_DAG' | 'EPISTEMIC'>('CAUSAL_DAG');
   const [epistemicFilter, setEpistemicFilter] = useState<string>('ALL');
 
-  const entitiesList: WorldEntity[] = Object.values(worldModel.entities);
+  const entitiesList: WorldEntity[] = worldModel?.entities ? Object.values(worldModel.entities) : [];
 
+  const epistemicList = worldModel?.epistemicRegistry || [];
   const filteredStatements = epistemicFilter === 'ALL' 
-    ? worldModel.epistemicRegistry 
-    : worldModel.epistemicRegistry.filter(s => s.status === epistemicFilter);
+    ? epistemicList 
+    : epistemicList.filter(s => s.status === epistemicFilter);
 
   const getStatusBadge = (status: EpistemicStatus) => {
     switch (status) {

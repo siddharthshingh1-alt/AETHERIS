@@ -25,9 +25,9 @@ export const KnowledgeFoundationView: React.FC<KnowledgeFoundationViewProps> = (
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedConcept, setSelectedConcept] = useState<Concept | null>(null);
 
-  const allConcepts = knowledgeCore.getAllConcepts();
-  const allRelationships = knowledgeCore.getAllRelationships();
-  const beliefUpdates = knowledgeCore.getBeliefUpdateHistory();
+  const allConcepts = knowledgeCore?.getAllConcepts ? knowledgeCore.getAllConcepts() : [];
+  const allRelationships = knowledgeCore?.getAllRelationships ? knowledgeCore.getAllRelationships() : [];
+  const beliefUpdates = knowledgeCore?.getBeliefUpdateHistory ? knowledgeCore.getBeliefUpdateHistory() : [];
 
   // Filtered concepts
   const filteredConcepts = allConcepts.filter((c) => {

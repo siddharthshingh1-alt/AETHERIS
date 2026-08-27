@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   FlaskConical,
   Play,
@@ -14,7 +14,7 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { runBenchmarkExperiment, ExperimentRunResult } from '../cognitive/experimentRunner';
-import { ComparativeExperimentReport } from '../cognitive/metrics';
+import { ComparativeExperimentReport, TaskComparisonResult, ExperimentSummaryOverview } from '../cognitive/metrics';
 import { UserProfile } from '../types/userState';
 
 interface UserExperimentsViewProps {
@@ -41,7 +41,45 @@ export const UserExperimentsView: React.FC<UserExperimentsViewProps> = ({ userPr
   };
 
   const report = result?.report;
-  const filteredTasks = report?.taskResults.filter((t) => {
+
+  const summary: ExperimentSummaryOverview | null = useMemo(() => {
+    if (!report) return null;
+    if (report.summary) return report.summary;
+    if (report.learningSummary && report.controlSummary && report.delta) {
+      return {
+        learningSuccessRate: report.learningSummary.overallSuccessRate ?? 0,
+        controlSuccessRate: report.controlSummary.overallSuccessRate ?? 0,
+        successRateDelta: report.delta.successRateDelta ?? 0,
+        meanUtilityDelta: report.delta.utilityDelta ?? 0,
+        predictionErrorReduction: report.delta.predictionErrorReduction ?? 0,
+        heldOutTransferRate: report.learningSummary.heldOutMetrics?.successRate ?? 0,
+        controlHeldOutRate: report.controlSummary.heldOutMetrics?.successRate ?? 0,
+      };
+    }
+    return null;
+  }, [report]);
+
+  const taskResults: TaskComparisonResult[] = useMemo(() => {
+    if (report?.taskResults && report.taskResults.length > 0) {
+      return report.taskResults;
+    }
+    if (result?.controlRecords && result?.learningRecords) {
+      return result.controlRecords.map((ctrl, i) => {
+        const learn = result.learningRecords[i];
+        return {
+          taskId: ctrl.taskId,
+          taskFamily: ctrl.taskFamily,
+          split: ctrl.split,
+          controlRecord: ctrl,
+          learningRecord: learn,
+          utilityDelta: (learn?.actualOutcome?.netUtility ?? 0) - (ctrl?.actualOutcome?.netUtility ?? 0),
+        };
+      });
+    }
+    return [];
+  }, [report, result]);
+
+  const filteredTasks = taskResults.filter((t) => {
     if (taskFilter === 'ALL') return true;
     return t.split === taskFilter;
   });
@@ -118,7 +156,7 @@ export const UserExperimentsView: React.FC<UserExperimentsViewProps> = ({ userPr
       )}
 
       {/* Results View */}
-      {report && (
+      {report && summary && (
         <div className="space-y-6">
           {/* Key Findings Highlights */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -129,14 +167,14 @@ export const UserExperimentsView: React.FC<UserExperimentsViewProps> = ({ userPr
               </span>
               <div className="flex items-baseline gap-2">
                 <span className="text-3xl font-bold text-emerald-400">
-                  {Math.round(report.summary.learningSuccessRate * 100)}%
+                  {Math.round(summary.learningSuccessRate * 100)}%
                 </span>
                 <span className="text-xs text-slate-500">
-                  vs {Math.round(report.summary.controlSuccessRate * 100)}% Control
+                  vs {Math.round(summary.controlSuccessRate * 100)}% Control
                 </span>
               </div>
               <div className="text-xs text-emerald-400 font-medium">
-                +{(report.summary.successRateDelta * 100).toFixed(1)}% Improvement
+                +{(summary.successRateDelta * 100).toFixed(1)}% Improvement
               </div>
             </div>
 
@@ -147,7 +185,7 @@ export const UserExperimentsView: React.FC<UserExperimentsViewProps> = ({ userPr
               </span>
               <div className="flex items-baseline gap-2">
                 <span className="text-3xl font-bold text-indigo-400">
-                  +${Math.round(report.summary.meanUtilityDelta).toLocaleString()}
+                  +${Math.round(summary.meanUtilityDelta).toLocaleString()}
                 </span>
               </div>
               <div className="text-xs text-slate-400">
@@ -162,7 +200,7 @@ export const UserExperimentsView: React.FC<UserExperimentsViewProps> = ({ userPr
               </span>
               <div className="flex items-baseline gap-2">
                 <span className="text-3xl font-bold text-sky-400">
-                  -{(report.summary.predictionErrorReduction * 100).toFixed(1)}%
+                  -{(summary.predictionErrorReduction * 100).toFixed(1)}%
                 </span>
               </div>
               <div className="text-xs text-slate-400">
@@ -177,7 +215,7 @@ export const UserExperimentsView: React.FC<UserExperimentsViewProps> = ({ userPr
               </span>
               <div className="flex items-baseline gap-2">
                 <span className="text-3xl font-bold text-amber-400">
-                  {Math.round(report.summary.heldOutTransferRate * 100)}%
+                  {Math.round(summary.heldOutTransferRate * 100)}%
                 </span>
               </div>
               <div className="text-xs text-slate-400">

@@ -261,7 +261,7 @@ export default function App() {
 
   // Lessons list
   const activeLessons = useMemo(() => {
-    return unifiedMemories.filter((m) => m.category === 'LESSONS' || m.source === 'LEARNED');
+    return (unifiedMemories || []).filter((m) => m.category === 'LESSONS' || m.source === 'LEARNED');
   }, [unifiedMemories]);
 
   // Calibration / Progress % derived from real accuracy history

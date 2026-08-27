@@ -118,6 +118,25 @@ export interface AgentBenchmarkSummary {
   totalToolCalls: number;
 }
 
+export interface TaskComparisonResult {
+  taskId: string;
+  taskFamily: string;
+  split: TaskSplit;
+  controlRecord: SingleTaskExecutionRecord;
+  learningRecord: SingleTaskExecutionRecord;
+  utilityDelta: number;
+}
+
+export interface ExperimentSummaryOverview {
+  learningSuccessRate: number;
+  controlSuccessRate: number;
+  successRateDelta: number;
+  meanUtilityDelta: number;
+  predictionErrorReduction: number;
+  heldOutTransferRate: number;
+  controlHeldOutRate: number;
+}
+
 export interface ComparativeExperimentReport {
   experimentId: string;
   timestamp: string;
@@ -132,6 +151,8 @@ export interface ComparativeExperimentReport {
     heldOutGeneralizationDelta: number; // Learning Held-Out - Control Held-Out
     pValEstimate?: number;
   };
+  summary: ExperimentSummaryOverview;
+  taskResults?: TaskComparisonResult[];
   hypothesisSupported: boolean;
   conclusionSummary: string;
 }
@@ -315,6 +336,28 @@ export function generateComparativeReport(
     conclusionSummary = `HYPOTHESIS INCONCLUSIVE: The performance delta (${(successRateDelta * 100).toFixed(1)}%) was below the statistical significance threshold.`;
   }
 
+  const summary: ExperimentSummaryOverview = {
+    learningSuccessRate: learningSummary.overallSuccessRate,
+    controlSuccessRate: controlSummary.overallSuccessRate,
+    successRateDelta,
+    meanUtilityDelta: utilityDelta,
+    predictionErrorReduction,
+    heldOutTransferRate: learningSummary.heldOutMetrics.successRate,
+    controlHeldOutRate: controlSummary.heldOutMetrics.successRate,
+  };
+
+  const taskResults: TaskComparisonResult[] = controlRecords.map((ctrl, idx) => {
+    const learn = learningRecords[idx];
+    return {
+      taskId: ctrl.taskId,
+      taskFamily: ctrl.taskFamily,
+      split: ctrl.split,
+      controlRecord: ctrl,
+      learningRecord: learn,
+      utilityDelta: (learn?.actualOutcome?.netUtility ?? 0) - (ctrl?.actualOutcome?.netUtility ?? 0),
+    };
+  });
+
   return {
     experimentId,
     timestamp: new Date().toISOString(),
@@ -328,6 +371,8 @@ export function generateComparativeReport(
       brierLossReduction,
       heldOutGeneralizationDelta,
     },
+    summary,
+    taskResults,
     hypothesisSupported,
     conclusionSummary,
   };

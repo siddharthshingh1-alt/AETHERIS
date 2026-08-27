@@ -122,12 +122,12 @@ export const UserMemoryView: React.FC<UserMemoryViewProps> = ({
           {categories.map((cat) => {
             const count =
               cat.id === 'ALL'
-                ? memories.length
+                ? safeMemories.length
                 : cat.id === 'KNOWLEDGE_CORE'
                 ? knowledgeCore
                   ? knowledgeCore.getAllConcepts().length
                   : 0
-                : memories.filter((m) => m.category === cat.id).length;
+                : safeMemories.filter((m) => m.category === cat.id).length;
             const isSelected = selectedCategory === cat.id;
             return (
               <button

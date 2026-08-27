@@ -168,8 +168,8 @@ export const ExpertModeView: React.FC<ExpertModeViewProps> = ({
         )}
         {activeExpertTab === 'learning' && (
           <LearningView
-            learningEvents={systemState.traces.flatMap((t) => t.learningEvents).filter(Boolean)}
-            accuracyHistory={systemState.overallAccuracyHistory}
+            learningEvents={(systemState?.traces || []).flatMap((t) => t.learningEvents || []).filter(Boolean)}
+            accuracyHistory={systemState?.overallAccuracyHistory || []}
           />
         )}
         {activeExpertTab === 'metacognition' && (
