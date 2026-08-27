@@ -19,6 +19,8 @@ export interface ParsedTeachingResult {
   
   title: string;
   summary: string;
+  proposedFact: string;
+  category: 'FACTS' | 'LESSONS' | 'EXPERIENCES' | 'PREFERENCES';
   targetEntity?: string;
   
   contextFeatures: {
@@ -40,6 +42,7 @@ export interface ParsedTeachingResult {
   proposedChange: string;
   rule: string;
   
+  experienceRecord: ExperienceRecord;
   createExperienceRecord: (overrides?: Partial<ExperienceRecord>) => ExperienceRecord;
 }
 
@@ -111,7 +114,7 @@ export function parseUserTeaching(text: string): ParsedTeachingResult {
     memoryType = 'FACT';
     evidenceStatus = 'FACT';
     initialConfidence = 0.90;
-  } else if (lower.includes('tends to') || lower.includes('usually') || lower.includes('hypothesis') || lower.startsWith('rule:') || (!lower.includes('delivered') && !lower.includes('yesterday') && lower.includes('when demand volatility is high'))) {
+  } else if (lower.startsWith('whenever') || lower.includes('assume') || lower.includes('exceeds') || lower.includes('tends to') || lower.includes('usually') || lower.includes('hypothesis') || lower.startsWith('rule:') || (!lower.includes('delivered') && !lower.includes('yesterday') && !lower.includes('took ') && lower.includes('when demand volatility is high'))) {
     memoryType = 'HYPOTHESIS_OR_RULE';
     evidenceStatus = 'USER_HYPOTHESIS';
     initialConfidence = 0.60;
@@ -149,7 +152,13 @@ export function parseUserTeaching(text: string): ParsedTeachingResult {
   } = {};
 
   // Demand Volatility
-  if (lower.includes('demand volatility was high') || lower.includes('high demand volatility') || lower.includes('volatility was high') || lower.includes('volatility is high')) {
+  const volPctMatch = lower.match(/(?:demand volatility|volatility)[^\d%]*(\d+(?:\.\d+)?)\s*%/);
+  const volDecMatch = lower.match(/(?:demand volatility|volatility)[^\d.]*(\d+\.\d+)/);
+  if (volPctMatch) {
+    contextFeatures.demandVolatility = parseFloat(volPctMatch[1]) / 100;
+  } else if (volDecMatch) {
+    contextFeatures.demandVolatility = parseFloat(volDecMatch[1]);
+  } else if (lower.includes('demand volatility was high') || lower.includes('high demand volatility') || lower.includes('volatility was high') || lower.includes('volatility is high')) {
     contextFeatures.demandVolatility = 0.45;
   } else if (lower.includes('demand volatility was low') || lower.includes('low demand volatility') || lower.includes('volatility was low') || lower.includes('volatility is low')) {
     contextFeatures.demandVolatility = 0.15;
@@ -158,7 +167,13 @@ export function parseUserTeaching(text: string): ParsedTeachingResult {
   }
 
   // Port Congestion
-  if (lower.includes('port congestion was low') || lower.includes('low port congestion') || lower.includes('congestion was low') || lower.includes('congestion was calm') || lower.includes('congestion is low')) {
+  const congPctMatch = lower.match(/(?:port congestion|congestion)[^\d%]*(\d+(?:\.\d+)?)\s*%/);
+  const congDecMatch = lower.match(/(?:port congestion|congestion)[^\d.]*(\d+\.\d+)/);
+  if (congPctMatch) {
+    contextFeatures.portCongestion = parseFloat(congPctMatch[1]) / 100;
+  } else if (congDecMatch) {
+    contextFeatures.portCongestion = parseFloat(congDecMatch[1]);
+  } else if (lower.includes('port congestion was low') || lower.includes('low port congestion') || lower.includes('congestion was low') || lower.includes('congestion was calm') || lower.includes('congestion is low')) {
     contextFeatures.portCongestion = 0.20;
   } else if (lower.includes('port congestion was high') || lower.includes('high port congestion') || lower.includes('congestion was high') || lower.includes('congestion is high')) {
     contextFeatures.portCongestion = 0.55;
@@ -178,14 +193,20 @@ export function parseUserTeaching(text: string): ParsedTeachingResult {
   let isSuccess = true;
   let stockoutOccurred = false;
 
-  // Match "X days late"
-  const delayMatch = lower.match(/(\d+(?:\.\d+)?)\s*days?\s*late/);
-  if (delayMatch) {
-    delayDays = parseFloat(delayMatch[1]);
-    isSuccess = false;
-  } else if (lower.includes('on time') || lower.includes('delivered on time') || lower.includes('successful')) {
+  // Match "X days late", "took X days", "delayed by X days", "X days delay", etc.
+  const delayMatch =
+    lower.match(/took\s*(\d+(?:\.\d+)?)\s*days/i) ||
+    lower.match(/delayed\s*by\s*(\d+(?:\.\d+)?)\s*days/i) ||
+    lower.match(/(\d+(?:\.\d+)?)\s*days?\s*late/i) ||
+    lower.match(/(\d+(?:\.\d+)?)\s*days?\s*delay/i) ||
+    lower.match(/(\d+(?:\.\d+)?)\s*days?\s*to\s*deliver/i);
+
+  if (lower.includes('0 days delay') || lower.includes('on time') || lower.includes('delivered on time') || lower.includes('successful')) {
     delayDays = 0;
     isSuccess = true;
+  } else if (delayMatch) {
+    delayDays = parseFloat(delayMatch[1]);
+    isSuccess = delayDays <= 0;
   } else if (lower.includes('delayed') || lower.includes('late')) {
     delayDays = 3.0;
     isSuccess = false;
@@ -240,6 +261,15 @@ export function parseUserTeaching(text: string): ParsedTeachingResult {
     confidence: initialConfidence,
     title,
     summary,
+    proposedFact: summary,
+    category:
+      memoryType === 'PREFERENCE'
+        ? 'PREFERENCES'
+        : memoryType === 'LESSON' || memoryType === 'HYPOTHESIS_OR_RULE'
+        ? 'LESSONS'
+        : memoryType === 'FACT'
+        ? 'FACTS'
+        : 'EXPERIENCES',
     targetEntity,
     contextFeatures,
     observation: {
@@ -252,6 +282,7 @@ export function parseUserTeaching(text: string): ParsedTeachingResult {
     interpretation,
     proposedChange,
     rule,
+    experienceRecord: {} as any, // populated below
     createExperienceRecord: (overrides = {}) => {
       const now = new Date().toISOString();
       const expId = `exp_user_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
@@ -334,5 +365,6 @@ export function parseUserTeaching(text: string): ParsedTeachingResult {
     },
   };
 
+  result.experienceRecord = result.createExperienceRecord();
   return result;
 }

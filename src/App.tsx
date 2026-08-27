@@ -11,7 +11,9 @@ import {
   createDefaultExperienceStore,
   CognitiveDecisionTrace,
 } from './cognitive/chatDecisionEngine';
-import { ExperienceStore } from './cognitive/experienceStore';
+import { ExperienceStore, ExperienceRecord } from './cognitive/experienceStore';
+import { LocalStorageAdapter } from './cognitive/persistence';
+import { parseUserTeaching, detectTeachingIntent } from './cognitive/teachingParser';
 
 // Redesigned User-Friendly Components
 import { FirstTimeExperience } from './components/FirstTimeExperience';
@@ -70,27 +72,15 @@ export default function App() {
   const [decisionExplanationData, setDecisionExplanationData] = useState<DecisionExplanationData | null>(null);
   const [isDeepReasoningOpen, setIsDeepReasoningOpen] = useState<boolean>(false);
 
-  // 5. User-Taught Custom Memories (Local Overrides & Teaching)
-  const [userTaughtMemories, setUserTaughtMemories] = useState<UserFriendlyMemoryItem[]>([
-    {
-      id: 'taught_alpha_gsm',
-      title: 'Supplier Alpha — Double-check GSM measurements',
-      description: 'Whenever placing an order with Supplier Alpha, verify GSM fabric measurements twice before shipment dispatch.',
-      category: 'FACTS',
-      source: 'TAUGHT_BY_YOU',
-      confidence: 0.95,
-      createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-      timesUsed: 4,
-      timesInfluenced: 3,
-      details: {
-        whatLearned: 'Supplier Alpha requires explicit pre-shipment GSM inspection verification.',
-        whyBelieveThis: 'Explicitly instructed by user during initial operational setup.',
-      },
-    },
-  ]);
-
-  // 5b. Cognitive Experience Store & Decision Traces for Live Chat
-  const experienceStoreRef = useRef<ExperienceStore>(createDefaultExperienceStore());
+  // 5. Cognitive Experience Store (Single source of truth with LocalStorage persistence)
+  const [experienceStoreRevision, setExperienceStoreRevision] = useState<number>(0);
+  const experienceStoreRef = useRef<ExperienceStore | null>(null);
+  if (!experienceStoreRef.current) {
+    experienceStoreRef.current = createDefaultExperienceStore(
+      'aria_live_store',
+      new LocalStorageAdapter<ExperienceRecord[]>('aetheris_cognitive_experiences')
+    );
+  }
   const decisionTracesRef = useRef<Map<string, CognitiveDecisionTrace>>(new Map());
 
   // 6. User Chat History
@@ -180,75 +170,85 @@ export default function App() {
     }));
   };
 
-  // Convert raw system state into unified UserFriendlyMemoryItem list
+  // Convert raw system state & ExperienceStore into unified UserFriendlyMemoryItem list
   const unifiedMemories = useMemo<UserFriendlyMemoryItem[]>(() => {
-    const list: UserFriendlyMemoryItem[] = [...(userTaughtMemories || [])];
+    const list: UserFriendlyMemoryItem[] = [];
+    const store = experienceStoreRef.current;
 
-    // Add Semantic Memory Rules (Learned Lessons)
+    // 1. Experiences and Taught Rules from ExperienceStore (Single Source of Truth)
+    if (store) {
+      const allExperiences = store.getAllExperiences();
+      allExperiences.forEach((exp) => {
+        const isUserTaught = exp.source === 'USER_TAUGHT';
+        const title = exp.lesson?.observedFact || exp.errorCause?.observedFact || `Observation #${exp.taskId}`;
+        const desc = exp.lesson?.rule || exp.lesson?.interpretation || exp.errorCause?.interpretation || 'Empirical execution record';
+
+        list.push({
+          id: exp.experienceId,
+          title: title.slice(0, 60) + (title.length > 60 ? '...' : ''),
+          description: desc,
+          category:
+            exp.memoryType === 'PREFERENCE'
+              ? 'PREFERENCES'
+              : exp.memoryType === 'LESSON' || exp.memoryType === 'HYPOTHESIS_OR_RULE'
+              ? 'LESSONS'
+              : exp.memoryType === 'FACT'
+              ? 'FACTS'
+              : 'EXPERIENCES',
+          source: isUserTaught ? 'TAUGHT_BY_YOU' : 'OBSERVED',
+          confidence: exp.lesson?.confidence || exp.confidence || 0.85,
+          evidenceCount: (exp.supportingEvidenceCount ?? 1) + (exp.contradictingEvidenceCount ?? 0),
+          createdAt: exp.createdAt || new Date().toISOString(),
+          timesUsed: isUserTaught ? 3 : 5,
+          timesInfluenced: isUserTaught ? 2 : 4,
+          details: {
+            whatHappened: exp.actualOutcome
+              ? {
+                  expected: `Delay: ${exp.expectedOutcome?.delayDays?.toFixed(1) || 0}d, Cost: $${(exp.expectedOutcome?.cost || 0).toLocaleString()}`,
+                  actual: `Delay: ${exp.actualOutcome?.delayDays?.toFixed(1) || 0}d, Cost: $${(exp.actualOutcome?.cost || 0).toLocaleString()}`,
+                  predictionError: exp.predictionError ? `Normalized Error: ${(exp.predictionError.normalizedError || 0).toFixed(2)}` : undefined,
+                }
+              : undefined,
+            whatLearned: desc,
+            whyBelieveThis: isUserTaught
+              ? `Taught directly by user (Evidence Status: ${exp.evidenceStatus || 'USER_HYPOTHESIS'}).`
+              : `Empirically observed in experiment ${exp.sourceExperimentId || 'baseline'}.`,
+            applicableConditions: exp.applicableConditions?.featureConstraints
+              ? Object.entries(exp.applicableConditions.featureConstraints)
+                  .map(([k, v]) => `${k} ≥ ${(v as any).min}`)
+                  .join('; ')
+              : undefined,
+          },
+        });
+      });
+    }
+
+    // 2. Semantic Memory Rules (Autonomous engine synthesis)
     (state.memorySystem?.semanticMemory || []).forEach((sem) => {
       const ruleText = sem.invariantRule || '';
-      list.push({
-        id: sem.id || `sem_${Math.random().toString(36).slice(2, 7)}`,
-        title: ruleText.slice(0, 60) + (ruleText.length > 60 ? '...' : ''),
-        description: ruleText,
-        category: 'LESSONS',
-        source: 'LEARNED',
-        confidence: sem.confidence ?? 0.85,
-        evidenceCount: sem.supportingEpisodeIds?.length || 1,
-        createdAt: new Date().toISOString(),
-        timesUsed: 6,
-        timesInfluenced: 4,
-        details: {
-          whatLearned: ruleText,
-          whyBelieveThis: `Synthesized across ${sem.supportingEpisodeIds?.length || 1} empirical episodes with generality rating of ${((sem.generalityScore ?? 0.9) * 100).toFixed(0)}%.`,
-          applicableConditions: (sem.applicabilityConditions || []).join('; '),
-        },
-      });
-    });
-
-    // Add Episodic Memories (System Observed Experiences)
-    (state.memorySystem?.episodicMemory || []).slice(-6).forEach((ep) => {
-      list.push({
-        id: ep.id || `ep_${Math.random().toString(36).slice(2, 7)}`,
-        title: `Observation #${ep.cycle ?? 0}: ${ep.actionTaken?.title || ep.id}`,
-        description: `Carried out ${ep.actionTaken?.title || 'Action'}. Observed delay: ${ep.actualOutcome?.actualDelayDays?.toFixed(1) || 0}d, cost: $${(ep.actualOutcome?.actualCost || 0).toLocaleString()}.`,
-        category: 'EXPERIENCES',
-        source: 'OBSERVED',
-        confidence: 0.90,
-        evidenceCount: 1,
-        createdAt: new Date().toISOString(),
-        details: {
-          whatHappened: {
-            expected: `Delay: ${ep.predictedOutcome?.expectedDelayDays?.toFixed(1) || 0}d, Cost: $${(ep.predictedOutcome?.expectedCost || 0).toLocaleString()}`,
-            actual: `Delay: ${ep.actualOutcome?.actualDelayDays?.toFixed(1) || 0}d, Cost: $${(ep.actualOutcome?.actualCost || 0).toLocaleString()}`,
-            predictionError: `Δ Delay: +${((ep.actualOutcome?.actualDelayDays || 0) - (ep.predictedOutcome?.expectedDelayDays || 0)).toFixed(1)}d`,
+      if (!list.some((item) => item.description === ruleText)) {
+        list.push({
+          id: sem.id || `sem_${Math.random().toString(36).slice(2, 7)}`,
+          title: ruleText.slice(0, 60) + (ruleText.length > 60 ? '...' : ''),
+          description: ruleText,
+          category: 'LESSONS',
+          source: 'LEARNED',
+          confidence: sem.confidence ?? 0.85,
+          evidenceCount: sem.supportingEpisodeIds?.length || 1,
+          createdAt: new Date().toISOString(),
+          timesUsed: 6,
+          timesInfluenced: 4,
+          details: {
+            whatLearned: ruleText,
+            whyBelieveThis: `Synthesized across ${sem.supportingEpisodeIds?.length || 1} empirical episodes with generality rating of ${((sem.generalityScore ?? 0.9) * 100).toFixed(0)}%.`,
+            applicableConditions: (sem.applicabilityConditions || []).join('; '),
           },
-          whatLearned: ep.keyInsight || 'Empirical execution observation',
-          whyBelieveThis: 'Direct empirical observation measured during cognitive cycle execution.',
-        },
-      });
-    });
-
-    // Add World Model Epistemic Statements (Inferences / Facts)
-    (state.worldModel?.epistemicStatements || []).slice(-4).forEach((st) => {
-      const statementText = st.statement || '';
-      list.push({
-        id: st.id || `stmt_${Math.random().toString(36).slice(2, 7)}`,
-        title: statementText,
-        description: `${statementText} (Certainty: ${((st.confidence ?? 0.8) * 100).toFixed(0)}%)`,
-        category: st.status === 'FACT' ? 'FACTS' : 'LESSONS',
-        source: st.status === 'FACT' ? 'OBSERVED' : 'INFERRED',
-        confidence: st.confidence ?? 0.8,
-        createdAt: new Date().toISOString(),
-        details: {
-          whatLearned: statementText,
-          whyBelieveThis: `Epistemic tracking status: ${st.status}. Confidence backed by ${st.evidenceIds?.length || 0} evidence references.`,
-        },
-      });
+        });
+      }
     });
 
     return list;
-  }, [userTaughtMemories, state.memorySystem, state.worldModel]);
+  }, [experienceStoreRevision, state.memorySystem, state.worldModel]);
 
   // Lessons list
   const activeLessons = useMemo(() => {
@@ -283,38 +283,34 @@ export default function App() {
 
     setChatMessages((prev) => [...prev, userMsg]);
 
-    // Check if user is teaching a rule or requesting a decision
+    const isTeaching = detectTeachingIntent(text);
     const lower = text.toLowerCase();
-    const isTeaching =
-      lower.startsWith('remember') ||
-      lower.includes('when ordering') ||
-      lower.includes('whenever') ||
-      lower.includes('check gsm') ||
-      lower.includes('rule:');
-
     const isDecisionRequest =
       lower.includes('help me decide') ||
       lower.includes('which supplier') ||
       lower.includes('freight option') ||
       lower.includes('choose') ||
-      lower.includes('decision');
+      lower.includes('decision') ||
+      lower.includes('should i pick') ||
+      lower.includes('recommend');
 
     setTimeout(() => {
       if (isTeaching) {
-        // Extract understood fact
-        const extractedFact = text
-          .replace(/^(remember that|remember|teach:)\s*/i, '')
-          .trim();
+        const parsed = parseUserTeaching(text);
 
         const responseMsg: ChatMessage = {
           id: `msg_resp_${Date.now()}`,
           sender: 'aetheris',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          text: `Got it. I've structured this as a new memory candidate.`,
+          text: `I understood this as a new **${parsed.memoryType}** memory (${parsed.evidenceStatus.replace(/_/g, ' ')}). Please verify below to save it into my persistent experience store.`,
           teachingCard: {
-            proposedFact: extractedFact,
-            category: 'FACTS',
+            proposedFact: parsed.proposedFact,
+            category: parsed.category,
+            memoryType: parsed.memoryType,
+            evidenceStatus: parsed.evidenceStatus,
+            confidence: parsed.confidence,
             status: 'PENDING',
+            rawText: text,
           },
         };
         setChatMessages((prev) => [...prev, responseMsg]);
@@ -323,8 +319,7 @@ export default function App() {
         const decisionTrace = evaluateCognitiveDecision({
           query: text,
           environmentState: state.environment,
-          experienceStore: experienceStoreRef.current,
-          userTaughtMemories,
+          experienceStore: experienceStoreRef.current!,
         });
 
         // Store execution trace for transparent inspection
@@ -334,7 +329,7 @@ export default function App() {
           id: `msg_resp_${Date.now()}`,
           sender: 'aetheris',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          text: `I've evaluated your decision using the cognitive engine, querying retrieved experiences and calculating expected utility.`,
+          text: `I've evaluated your decision using the cognitive engine, querying retrieved experiences from memory and calculating expected utility.`,
           decisionCard: {
             query: text,
             recommendedAction: decisionTrace.experienceInformed.selectedActionLabel,
@@ -348,6 +343,10 @@ export default function App() {
               confidence: m.confidence,
               source: m.source,
               influencedPrediction: m.influencedPrediction,
+              influenceMagnitude: m.influenceMagnitude,
+              affectedVariable: m.affectedVariable,
+              supportingCount: m.supportingCount,
+              contradictingCount: m.contradictingCount,
             })),
             causalSummary: {
               baselineAction: decisionTrace.baseline.selectedActionLabel,
@@ -368,7 +367,7 @@ export default function App() {
           id: `msg_resp_${Date.now()}`,
           sender: 'aetheris',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          text: `I'm currently tracking ${unifiedMemories.length} memories and ${activeLessons.length} validated lessons. You can teach me operational rules or ask me to evaluate logistics, inventory, and supplier decisions.`,
+          text: `I'm currently tracking ${unifiedMemories.length} memories in my experience store. You can teach me operational rules (e.g. "Remember that Supplier Alpha took 4 days under port congestion") or ask me to evaluate supplier and freight decisions.`,
         };
         setChatMessages((prev) => [...prev, responseMsg]);
       }
@@ -376,7 +375,7 @@ export default function App() {
   };
 
   const handleSaveProposedMemory = (messageId: string, memoryText: string) => {
-    // 1. Update message status
+    // 1. Update message status in chat
     setChatMessages((prev) =>
       prev.map((msg) =>
         msg.id === messageId && msg.teachingCard
@@ -385,24 +384,10 @@ export default function App() {
       )
     );
 
-    // 2. Add to user memories
-    const newMemory: UserFriendlyMemoryItem = {
-      id: `taught_${Date.now()}`,
-      title: memoryText.slice(0, 50) + (memoryText.length > 50 ? '...' : ''),
-      description: memoryText,
-      category: 'FACTS',
-      source: 'TAUGHT_BY_YOU',
-      confidence: 0.95,
-      createdAt: new Date().toISOString(),
-      timesUsed: 0,
-      timesInfluenced: 0,
-      details: {
-        whatLearned: memoryText,
-        whyBelieveThis: 'Taught directly by you in Chat.',
-      },
-    };
-
-    setUserTaughtMemories((prev) => [newMemory, ...prev]);
+    // 2. Parse and add to persistent ExperienceStore
+    const parsed = parseUserTeaching(memoryText);
+    experienceStoreRef.current?.addExperience(parsed.experienceRecord);
+    setExperienceStoreRevision((v) => v + 1);
 
     // 3. Log Activity
     setUserActivityEvents((prev) => [
@@ -411,8 +396,8 @@ export default function App() {
         timestamp: new Date().toISOString(),
         timeString: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         type: 'TEACH',
-        title: 'You taught AETHERIS a new memory',
-        description: `Saved: "${memoryText}"`,
+        title: `You taught ${userProfile.name} a new ${parsed.memoryType} memory`,
+        description: `Saved to ExperienceStore: "${memoryText}"`,
       },
       ...prev,
     ]);
@@ -434,21 +419,22 @@ export default function App() {
       )
     );
 
-    const newMemory: UserFriendlyMemoryItem = {
-      id: `taught_corrected_${Date.now()}`,
-      title: correctedText.slice(0, 50) + (correctedText.length > 50 ? '...' : ''),
-      description: correctedText,
-      category: 'FACTS',
-      source: 'TAUGHT_BY_YOU',
-      confidence: 0.98,
-      createdAt: new Date().toISOString(),
-      details: {
-        whatLearned: correctedText,
-        whyBelieveThis: 'Direct user correction provided in Chat.',
-      },
-    };
+    const parsed = parseUserTeaching(correctedText);
+    parsed.experienceRecord.confidence = 0.98;
+    experienceStoreRef.current?.addExperience(parsed.experienceRecord);
+    setExperienceStoreRevision((v) => v + 1);
 
-    setUserTaughtMemories((prev) => [newMemory, ...prev]);
+    setUserActivityEvents((prev) => [
+      {
+        id: `act_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        timeString: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        type: 'TEACH',
+        title: 'Memory updated with your refined correction',
+        description: `Saved to ExperienceStore: "${correctedText}"`,
+      },
+      ...prev,
+    ]);
   };
 
   // ----------------------------------------------------
@@ -456,32 +442,28 @@ export default function App() {
   // ----------------------------------------------------
 
   const handleCorrectExistingMemory = (memoryId: string, correctedText: string, note: string) => {
-    setUserTaughtMemories((prev) =>
-      prev.map((m) => {
-        if (m.id === memoryId) {
-          const prevDesc = m.description;
-          const history = m.details?.userCorrectionHistory || [];
-          return {
-            ...m,
-            description: correctedText,
-            details: {
-              ...m.details,
-              whatLearned: correctedText,
-              userCorrectionHistory: [
-                ...history,
-                {
-                  correctedAt: new Date().toISOString(),
-                  previousValue: prevDesc,
-                  newValue: correctedText,
-                  userNote: note,
-                },
-              ],
-            },
-          };
-        }
-        return m;
-      })
-    );
+    const store = experienceStoreRef.current;
+    if (store) {
+      store.updateExperience(memoryId, (prev) => {
+        return {
+          ...prev,
+          lesson: prev.lesson
+            ? {
+                ...prev.lesson,
+                observedFact: correctedText,
+                rule: correctedText,
+              }
+            : undefined,
+          errorCause: prev.errorCause
+            ? {
+                ...prev.errorCause,
+                observedFact: correctedText,
+              }
+            : undefined,
+        };
+      });
+      setExperienceStoreRevision((v) => v + 1);
+    }
 
     setUserActivityEvents((prev) => [
       {
@@ -497,7 +479,8 @@ export default function App() {
   };
 
   const handleForgetMemory = (memoryId: string) => {
-    setUserTaughtMemories((prev) => prev.filter((m) => m.id !== memoryId));
+    experienceStoreRef.current?.removeExperience(memoryId);
+    setExperienceStoreRevision((v) => v + 1);
     setSelectedMemoryDetail(null);
 
     setUserActivityEvents((prev) => [
@@ -507,7 +490,7 @@ export default function App() {
         timeString: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         type: 'MEMORY_CREATED',
         title: 'Memory forgotten',
-        description: `Memory record #${memoryId.slice(-6)} was purged from personal store.`,
+        description: `Memory record #${memoryId.slice(-6)} was purged from ExperienceStore.`,
       },
       ...prev,
     ]);
@@ -527,8 +510,7 @@ export default function App() {
       trace = evaluateCognitiveDecision({
         query: query || 'Supplier & Freight Logistics Decision under Port Congestion',
         environmentState: state.environment,
-        experienceStore: experienceStoreRef.current,
-        userTaughtMemories,
+        experienceStore: experienceStoreRef.current!,
       });
       decisionTracesRef.current.set(trace.traceId, trace);
     }
@@ -545,23 +527,11 @@ export default function App() {
       <FirstTimeExperience
         onCompleteOnboarding={(newProfile) => {
           setUserProfile(newProfile);
-          // Insert initial context as first taught memory
+          // Insert initial context as first taught memory into ExperienceStore
           if (newProfile.contextDescription) {
-            setUserTaughtMemories([
-              {
-                id: `taught_initial_${Date.now()}`,
-                title: 'Initial Environment & Operational Goals',
-                description: newProfile.contextDescription,
-                category: 'FACTS',
-                source: 'TAUGHT_BY_YOU',
-                confidence: 1.0,
-                createdAt: new Date().toISOString(),
-                details: {
-                  whatLearned: newProfile.contextDescription,
-                  whyBelieveThis: 'Provided during onboarding setup.',
-                },
-              },
-            ]);
+            const parsed = parseUserTeaching(newProfile.contextDescription);
+            experienceStoreRef.current?.addExperience(parsed.experienceRecord);
+            setExperienceStoreRevision((v) => v + 1);
           }
         }}
         onSkipToDefault={() => {
@@ -665,7 +635,8 @@ export default function App() {
                 userProfile={userProfile}
                 onUpdateProfile={(updated) => setUserProfile((prev) => ({ ...prev, ...updated }))}
                 onClearUserMemory={() => {
-                  setUserTaughtMemories([]);
+                  experienceStoreRef.current?.clear();
+                  setExperienceStoreRevision((v) => v + 1);
                   setUserActivityEvents([]);
                 }}
                 onResetToDefault={() => {

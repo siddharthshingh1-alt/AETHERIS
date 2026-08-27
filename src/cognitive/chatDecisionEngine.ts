@@ -12,6 +12,7 @@
  */
 
 import { ExperienceStore, ExperienceRecord, CognitiveMemoryType, CognitiveEvidenceStatus } from './experienceStore';
+import { PersistenceAdapter } from './persistence';
 import { EnvironmentState } from '../types/cognitive';
 import { UserFriendlyMemoryItem } from '../types/userState';
 import { DecisionExplanationData } from '../components/DecisionExplanationModal';
@@ -104,102 +105,107 @@ export interface CognitiveDecisionTrace {
 /**
  * Creates an initialized ExperienceStore populated with verified empirical experiences.
  */
-export function createDefaultExperienceStore(experimentId: string = 'aria_live_store'): ExperienceStore {
-  const store = new ExperienceStore(experimentId);
+export function createDefaultExperienceStore(
+  experimentId: string = 'aria_live_store',
+  persistenceAdapter?: PersistenceAdapter<ExperienceRecord[]>
+): ExperienceStore {
+  const store = new ExperienceStore(experimentId, persistenceAdapter);
 
-  // Seed with realistic empirical experiences
-  const seedExperiences: ExperienceRecord[] = [
-    {
-      experienceId: 'exp_rec_alpha_01',
-      taskId: 'TASK_SEED_1',
-      taskFamily: 'SUPPLIER_SELECTION',
-      context: { portCongestion: 0.62, inventoryDays: 2.0, orderVolume: 1250 },
-      prediction: { expectedUtility: 8800 },
-      confidence: 0.88,
-      predictionFeatures: { portCongestion: 0.62, inventoryDays: 2.0, orderVolume: 1250 },
-      selectedAction: { actionType: 'SUPPLIER_ALPHA', targetEntity: 'Supplier Alpha', parameters: { mode: 'maritime' } },
-      expectedOutcome: { delayDays: 2.0, cost: 1200, netUtility: 8800 },
-      actualOutcome: { delayDays: 4.5, cost: 1200, stockoutOccurred: true, netUtility: 4300 },
-      predictionError: {
-        delayErrorDelta: 2.5,
-        costErrorDelta: 0,
-        normalizedError: 0.55,
-        brierLoss: 0.30,
-        direction: 'UNDERESTIMATED',
-      },
-      success: false,
-      errorCause: {
-        observedFact: 'Maritime shipping arrival was delayed to 4.5 days due to container offload bottleneck.',
-        interpretation: 'Port congestion (>0.40) non-linearly amplifies maritime transit lead times.',
-        identifiedDriver: 'portCongestion',
-      },
-      lesson: {
-        observedFact: 'Maritime freight delayed by +2.5 days during port congestion > 0.40.',
-        interpretation: 'Under congestion, maritime risk exceeds air freight cost premium.',
-        proposedChange: 'Switch to Dual Sourcing or Express Air Freight when port congestion exceeds 40%.',
-        confidence: 0.88,
-        rule: 'IF portCongestion > 0.40 THEN add +2.5d maritime delay penalty',
-        targetFeature: 'estimatedDelay',
-        adjustmentWeight: 2.5,
-      },
-      applicableConditions: {
+  // Seed with realistic empirical experiences only if store is empty
+  if (store.getAllExperiences().length === 0) {
+    const seedExperiences: ExperienceRecord[] = [
+      {
+        experienceId: 'exp_rec_alpha_01',
+        taskId: 'TASK_SEED_1',
         taskFamily: 'SUPPLIER_SELECTION',
-        featureConstraints: { portCongestion: { min: 0.4 } },
+        context: { portCongestion: 0.62, inventoryDays: 2.0, orderVolume: 1250 },
+        prediction: { expectedUtility: 8800 },
+        confidence: 0.88,
+        predictionFeatures: { portCongestion: 0.62, inventoryDays: 2.0, orderVolume: 1250 },
+        selectedAction: { actionType: 'SUPPLIER_ALPHA', targetEntity: 'Supplier Alpha', parameters: { mode: 'maritime' } },
+        expectedOutcome: { delayDays: 2.0, cost: 1200, netUtility: 8800 },
+        actualOutcome: { delayDays: 4.5, cost: 1200, stockoutOccurred: true, netUtility: 4300 },
+        predictionError: {
+          delayErrorDelta: 2.5,
+          costErrorDelta: 0,
+          normalizedError: 0.55,
+          brierLoss: 0.30,
+          direction: 'UNDERESTIMATED',
+        },
+        success: false,
+        errorCause: {
+          observedFact: 'Maritime shipping arrival was delayed to 4.5 days due to container offload bottleneck.',
+          interpretation: 'Port congestion (>0.40) non-linearly amplifies maritime transit lead times.',
+          identifiedDriver: 'portCongestion',
+        },
+        lesson: {
+          observedFact: 'Maritime freight delayed by +2.5 days during port congestion > 0.40.',
+          interpretation: 'Under congestion, maritime risk exceeds air freight cost premium.',
+          proposedChange: 'Switch to Dual Sourcing or Express Air Freight when port congestion exceeds 40%.',
+          confidence: 0.88,
+          rule: 'IF portCongestion > 0.40 THEN add +2.5d maritime delay penalty',
+          targetFeature: 'estimatedDelay',
+          adjustmentWeight: 2.5,
+        },
+        applicableConditions: {
+          taskFamily: 'SUPPLIER_SELECTION',
+          featureConstraints: { portCongestion: { min: 0.4 } },
+        },
+        createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
+        sourceExperimentId: experimentId,
+        memoryType: 'LESSON',
+        source: 'BENCHMARK',
+        targetEntity: 'Supplier Alpha',
+        evidenceStatus: 'EMPIRICALLY_VALIDATED',
+        supportingEvidenceCount: 1,
+        contradictingEvidenceCount: 0,
       },
-      createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-      sourceExperimentId: experimentId,
-      memoryType: 'LESSON',
-      source: 'BENCHMARK',
-      targetEntity: 'Supplier Alpha',
-      evidenceStatus: 'EMPIRICALLY_VALIDATED',
-      supportingEvidenceCount: 1,
-      contradictingEvidenceCount: 0,
-    },
-    {
-      experienceId: 'exp_rec_volatility_02',
-      taskId: 'TASK_SEED_2',
-      taskFamily: 'RESOURCE_ALLOCATION',
-      context: { demandVolatility: 0.45, inventoryDays: 1.5 },
-      prediction: { expectedUtility: 9800 },
-      confidence: 0.82,
-      predictionFeatures: { demandVolatility: 0.45, inventoryDays: 1.5 },
-      selectedAction: { actionType: 'LEAN_CASH', targetEntity: 'Lean Cash Reserves', parameters: {} },
-      expectedOutcome: { netUtility: 9800 },
-      actualOutcome: { netUtility: 5200, stockoutOccurred: true },
-      predictionError: {
-        normalizedError: 0.47,
-        brierLoss: 0.22,
-        direction: 'UNDERESTIMATED',
-      },
-      success: false,
-      errorCause: {
-        observedFact: 'Demand spike of +40% depleted inventory prematurely.',
-        interpretation: 'Lean cash inventory buffers fail under high demand volatility.',
-        identifiedDriver: 'demandVolatility',
-      },
-      lesson: {
-        observedFact: 'Demand volatility > 0.30 caused safety stock exhaustion in 2 cycles.',
-        interpretation: 'Safety buffer hedging is required when market volatility is elevated.',
-        proposedChange: 'Maintain balanced hedging reserve when demand volatility > 0.30.',
-        confidence: 0.82,
-        rule: 'IF demandVolatility > 0.30 THEN apply buffer allocation hedge',
-      },
-      applicableConditions: {
+      {
+        experienceId: 'exp_rec_volatility_02',
+        taskId: 'TASK_SEED_2',
         taskFamily: 'RESOURCE_ALLOCATION',
-        featureConstraints: { demandVolatility: { min: 0.3 } },
+        context: { demandVolatility: 0.45, inventoryDays: 1.5 },
+        prediction: { expectedUtility: 9800 },
+        confidence: 0.82,
+        predictionFeatures: { demandVolatility: 0.45, inventoryDays: 1.5 },
+        selectedAction: { actionType: 'LEAN_CASH', targetEntity: 'Lean Cash Reserves', parameters: {} },
+        expectedOutcome: { netUtility: 9800 },
+        actualOutcome: { netUtility: 5200, stockoutOccurred: true },
+        predictionError: {
+          normalizedError: 0.47,
+          brierLoss: 0.22,
+          direction: 'UNDERESTIMATED',
+        },
+        success: false,
+        errorCause: {
+          observedFact: 'Demand spike of +40% depleted inventory prematurely.',
+          interpretation: 'Lean cash inventory buffers fail under high demand volatility.',
+          identifiedDriver: 'demandVolatility',
+        },
+        lesson: {
+          observedFact: 'Demand volatility > 0.30 caused safety stock exhaustion in 2 cycles.',
+          interpretation: 'Safety buffer hedging is required when market volatility is elevated.',
+          proposedChange: 'Maintain balanced hedging reserve when demand volatility > 0.30.',
+          confidence: 0.82,
+          rule: 'IF demandVolatility > 0.30 THEN apply buffer allocation hedge',
+        },
+        applicableConditions: {
+          taskFamily: 'RESOURCE_ALLOCATION',
+          featureConstraints: { demandVolatility: { min: 0.3 } },
+        },
+        createdAt: new Date(Date.now() - 86400000).toISOString(),
+        sourceExperimentId: experimentId,
+        memoryType: 'LESSON',
+        source: 'BENCHMARK',
+        targetEntity: 'Lean Cash Reserves',
+        evidenceStatus: 'EMPIRICALLY_VALIDATED',
+        supportingEvidenceCount: 1,
+        contradictingEvidenceCount: 0,
       },
-      createdAt: new Date(Date.now() - 86400000).toISOString(),
-      sourceExperimentId: experimentId,
-      memoryType: 'LESSON',
-      source: 'BENCHMARK',
-      targetEntity: 'Lean Cash Reserves',
-      evidenceStatus: 'EMPIRICALLY_VALIDATED',
-      supportingEvidenceCount: 1,
-      contradictingEvidenceCount: 0,
-    },
-  ];
+    ];
 
-  seedExperiences.forEach((exp) => store.addExperience(exp));
+    seedExperiences.forEach((exp) => store.addExperience(exp));
+  }
   return store;
 }
 
@@ -232,14 +238,20 @@ export function evaluateCognitiveDecision(params: {
     demandVolatility = 0.15;
   }
 
-  let portCongestion = environmentState.portCongestionLevel ?? 0.55;
-  if (queryLower.includes('port congestion is low') || queryLower.includes('congestion is low') || queryLower.includes('low port congestion') || queryLower.includes('congestion is calm')) {
-    portCongestion = 0.20;
-  } else if (queryLower.includes('port congestion is high') || queryLower.includes('congestion is high') || queryLower.includes('high port congestion')) {
-    portCongestion = 0.55;
+  let portCongestion = typeof environmentState.portCongestionLevel === 'number' 
+    ? environmentState.portCongestionLevel 
+    : typeof (environmentState as any).portCongestion === 'number' 
+    ? (environmentState as any).portCongestion 
+    : 0.55;
+  if (queryLower.includes('port congestion is low') || queryLower.includes('congestion is low') || queryLower.includes('low port congestion') || queryLower.includes('congestion is calm') || queryLower.includes('congestion (10%)') || queryLower.includes('10%')) {
+    portCongestion = 0.10;
+  } else if (queryLower.includes('port congestion is high') || queryLower.includes('congestion is high') || queryLower.includes('high port congestion') || queryLower.includes('60%') || queryLower.includes('65%')) {
+    portCongestion = 0.60;
   }
 
-  const invDays = Math.max(0.5, Math.round((environmentState.inventoryUnits / (environmentState.productionCapacity || 40)) * 10) / 10);
+  const invUnits = typeof environmentState.inventoryUnits === 'number' ? environmentState.inventoryUnits : 60;
+  const prodCap = typeof environmentState.productionCapacity === 'number' ? environmentState.productionCapacity : 40;
+  const invDays = Math.max(0.5, Math.round((invUnits / prodCap) * 10) / 10);
   const weatherDisruption = queryLower.includes('storm') || queryLower.includes('weather') ? true : environmentState.weatherDisruption ?? false;
   const cashReserves = environmentState.cash ?? 50000;
 
@@ -401,7 +413,10 @@ export function evaluateCognitiveDecision(params: {
 
   // 6. Compute Causal Delta
   const decisionChanged = baselineWinner.actionId !== experienceWinner.actionId;
-  const delayDeltaDays = Math.round((experienceWinner.estimatedDelay - baselineWinner.estimatedDelay) * 10) / 10;
+  const baselineWinnerExp = experienceCandidateScores.find((c) => c.actionId === baselineWinner.actionId);
+  const delayDeltaDays = baselineWinnerExp && baselineWinnerExp.estimatedDelay !== baselineWinner.estimatedDelay
+    ? Math.round((baselineWinnerExp.estimatedDelay - baselineWinner.estimatedDelay) * 10) / 10
+    : Math.round(Math.abs(experienceWinner.estimatedDelay - baselineWinner.estimatedDelay) * 10) / 10;
   const costDelta = experienceWinner.estimatedCost - baselineWinner.estimatedCost;
   const utilityDelta = experienceWinner.expectedUtility - baselineWinner.expectedUtility;
   const confidenceDelta = Math.round((experienceWinner.confidence - baselineWinner.confidence) * 100) / 100;

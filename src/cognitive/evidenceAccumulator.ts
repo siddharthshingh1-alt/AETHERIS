@@ -13,16 +13,20 @@ export interface AccumulatedEvidenceResult {
   targetEntity: string;
   supportingCount: number; // e.g. Count of delay/failure observations
   contradictingCount: number; // e.g. Count of on-time/success observations
+  supportingEpisodes?: string[];
+  contradictingEpisodes?: string[];
   totalSamples: number;
   
   // Numerical Adjustments
   netDelayAdjustment: number;
+  netDelayAdjustmentDays: number;
   netCostAdjustment: number;
   netPenaltyAdjustment: number;
   
   // Statistical Metrics
   effectiveConfidence: number; // 0.0 to 1.0
   evidenceConsistency: 'CONSISTENT_NEGATIVE' | 'CONSISTENT_POSITIVE' | 'CONTRADICTORY_MIXED' | 'NO_EVIDENCE';
+  hasEpistemicConflict: boolean;
   
   // Explanatory breakdown
   evidenceSummary: string;
@@ -30,24 +34,52 @@ export interface AccumulatedEvidenceResult {
 }
 
 export function accumulateEvidenceForAction(
-  actionId: string,
-  targetEntityName: string,
-  retrievedRecords: ExperienceRecord[],
-  currentContext: {
+  actionIdOrCandidate: string | { actionType?: string; targetEntity?: string; id?: string },
+  targetEntityOrRecords: string | ExperienceRecord[],
+  retrievedRecordsArg?: ExperienceRecord[],
+  currentContextArg?: {
     demandVolatility: number;
     portCongestion: number;
-    inventoryDays: number;
+    inventoryDays?: number;
     weatherDisruption?: boolean;
   }
 ): AccumulatedEvidenceResult {
+  let actionId = '';
+  let targetEntityName = '';
+  let retrievedRecords: ExperienceRecord[] = [];
+  let currentContext = {
+    demandVolatility: 0.25,
+    portCongestion: 0.55,
+    inventoryDays: 1.5,
+    weatherDisruption: false,
+  };
+
+  if (typeof actionIdOrCandidate === 'object') {
+    actionId = actionIdOrCandidate.actionType || actionIdOrCandidate.id || '';
+    targetEntityName = actionIdOrCandidate.targetEntity || '';
+    retrievedRecords = Array.isArray(targetEntityOrRecords) ? targetEntityOrRecords : [];
+    if (retrievedRecordsArg && typeof retrievedRecordsArg === 'object' && !Array.isArray(retrievedRecordsArg)) {
+      currentContext = { ...currentContext, ...(retrievedRecordsArg as any) };
+    }
+  } else {
+    actionId = actionIdOrCandidate;
+    targetEntityName = typeof targetEntityOrRecords === 'string' ? targetEntityOrRecords : '';
+    retrievedRecords = retrievedRecordsArg || [];
+    if (currentContextArg) {
+      currentContext = { ...currentContext, ...currentContextArg };
+    }
+  }
+
   let supportingCount = 0;
   let contradictingCount = 0;
+  const supportingEpisodes: string[] = [];
+  const contradictingEpisodes: string[] = [];
   let delayAdjustmentSum = 0;
   let costAdjustmentSum = 0;
   const retrievedRecordIds: string[] = [];
 
-  const entityLower = targetEntityName.toLowerCase();
-  const actionLower = actionId.toLowerCase();
+  const entityLower = (targetEntityName || '').toLowerCase();
+  const actionLower = (actionId || '').toLowerCase();
 
   for (const record of retrievedRecords) {
     const recordEntity = (record.targetEntity || record.selectedAction?.targetEntity || '').toLowerCase();
@@ -90,11 +122,13 @@ export function accumulateEvidenceForAction(
 
     if (isSuccess) {
       contradictingCount++;
+      contradictingEpisodes.push(record.experienceId);
       // A successful observation reduces expected delay
       delayAdjustmentSum -= 0.5 * effectiveWeight;
     } else {
       supportingCount++;
-      const addedDelay = Math.max(1.0, observedDelay > 0 ? observedDelay - 2.0 : 2.0);
+      supportingEpisodes.push(record.experienceId);
+      const addedDelay = observedDelay > 0 ? observedDelay : 2.0;
       delayAdjustmentSum += addedDelay * effectiveWeight;
     }
 
@@ -133,20 +167,25 @@ export function accumulateEvidenceForAction(
   // Calculate stockout penalty adjustment
   let netPenaltyAdjustment = 0;
   const projectedDelay = 2.0 + netDelayAdjustment; // Standard baseline 2.0d
-  if (projectedDelay > currentContext.inventoryDays) {
-    netPenaltyAdjustment = (projectedDelay - currentContext.inventoryDays) * 1800;
+  const invBuffer = currentContext.inventoryDays || 1.5;
+  if (projectedDelay > invBuffer) {
+    netPenaltyAdjustment = (projectedDelay - invBuffer) * 1800;
   }
 
   return {
     targetEntity: targetEntityName,
     supportingCount,
     contradictingCount,
+    supportingEpisodes,
+    contradictingEpisodes,
     totalSamples,
     netDelayAdjustment: Math.round(netDelayAdjustment * 10) / 10,
+    netDelayAdjustmentDays: Math.round(netDelayAdjustment * 10) / 10,
     netCostAdjustment: Math.round(costAdjustmentSum),
     netPenaltyAdjustment: Math.round(netPenaltyAdjustment),
     effectiveConfidence: Math.round(effectiveConfidence * 100) / 100,
     evidenceConsistency,
+    hasEpistemicConflict: evidenceConsistency === 'CONTRADICTORY_MIXED',
     evidenceSummary,
     retrievedRecordIds,
   };

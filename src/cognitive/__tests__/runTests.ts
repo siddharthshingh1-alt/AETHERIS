@@ -12,6 +12,10 @@ import { ExperienceStore, ExperienceRecord } from '../experienceStore';
 import { generateBenchmarkSuite } from '../benchmark';
 import { runBenchmarkExperiment, executeTaskForAgent } from '../experimentRunner';
 import { calculateAgentSummary, generateComparativeReport } from '../metrics';
+import { MemoryPersistenceAdapter } from '../persistence';
+import { parseUserTeaching, detectTeachingIntent } from '../teachingParser';
+import { evaluateCognitiveDecision } from '../chatDecisionEngine';
+import { accumulateEvidenceForAction } from '../evidenceAccumulator';
 
 let totalTests = 0;
 let passedTests = 0;
@@ -182,6 +186,137 @@ console.log('\n▶ TEST GROUP 4: Full End-to-End Experiment Runner');
   assert(rep.learningSummary.overallSuccessRate > rep.controlSummary.overallSuccessRate, 'Learning Agent outperforms Control Agent overall');
   assert(rep.learningSummary.heldOutMetrics.successRate >= rep.controlSummary.heldOutMetrics.successRate, 'Learning Agent transfers successfully to held-out tasks without negative degradation');
   assert(results.jsonlLogs.length > 500, 'Produced machine-readable JSONL logs');
+}
+
+// ----------------------------------------------------
+// TEST GROUP 5: User Teaching Parsing & Memory Categorization
+// ----------------------------------------------------
+console.log('\n▶ TEST GROUP 5: User Teaching Natural Language Parsing');
+{
+  // Test Intent Detection
+  assert(detectTeachingIntent('Remember that Supplier Alpha was delayed by 4 days during port congestion') === true, 'Detects "Remember that" teaching');
+  assert(detectTeachingIntent('I want to teach you: always check GSM measurements') === true, 'Detects "teach you" teaching');
+  assert(detectTeachingIntent('Help me decide between Supplier Alpha and Supplier Beta') === false, 'Detects decision query is NOT teaching');
+
+  // Test Parsing an Empirical Observation
+  const teaching1 = parseUserTeaching('Remember that Supplier Alpha took 4.5 days to deliver when port congestion was at 65%');
+  assert(teaching1.memoryType === 'EXPERIENCE', 'Classifies specific past incident as EXPERIENCE memoryType');
+  assert(teaching1.targetEntity === 'Supplier Alpha', 'Extracts target entity Supplier Alpha');
+  assert(teaching1.observation?.delayDays === 4.5, 'Extracts numeric delay of 4.5 days');
+  assert(teaching1.contextFeatures.portCongestion !== undefined && Math.abs(teaching1.contextFeatures.portCongestion - 0.65) < 0.01, 'Extracts context portCongestion = 0.65');
+  assert(teaching1.experienceRecord.source === 'USER_TAUGHT', 'Generates valid ExperienceRecord with USER_TAUGHT source');
+
+  // Test Parsing a Preference
+  const prefTeaching = parseUserTeaching('I always prefer Express Air Freight whenever shipping critical orders');
+  assert(prefTeaching.memoryType === 'PREFERENCE', 'Classifies preference statement as PREFERENCE memoryType');
+  assert(prefTeaching.evidenceStatus === 'USER_PREFERENCE', 'Sets evidence status to USER_PREFERENCE');
+
+  // Test Parsing a Hypothesis / Rule
+  const ruleTeaching = parseUserTeaching('Whenever port congestion exceeds 40%, assume maritime shipping will be delayed by 3 days');
+  assert(ruleTeaching.memoryType === 'HYPOTHESIS_OR_RULE' || ruleTeaching.memoryType === 'LESSON', 'Classifies conditional rule correctly');
+  assert(ruleTeaching.evidenceStatus === 'USER_HYPOTHESIS', 'Sets evidence status to USER_HYPOTHESIS');
+}
+
+// ----------------------------------------------------
+// TEST GROUP 6: Memory Persistence Adapter & Cross-Session Reload
+// ----------------------------------------------------
+console.log('\n▶ TEST GROUP 6: Memory Persistence Adapter & Cross-Session Reload');
+{
+  const memoryBackend = new MemoryPersistenceAdapter<ExperienceRecord[]>();
+  const store1 = new ExperienceStore('session_1', memoryBackend);
+
+  const taughtExp = parseUserTeaching('Supplier Alpha delivered 4 days late in port congestion 0.60').experienceRecord;
+  store1.addExperience(taughtExp);
+  assert(store1.size() === 1, 'Experience stored in initial session');
+
+  // Create a brand new store instance simulating page reload with same adapter
+  const store2 = new ExperienceStore('session_2', memoryBackend);
+  assert(store2.size() === 1, 'Reloaded store instance recovers persisted experience seamlessly');
+  const recovered = store2.getAllExperiences()[0];
+  assert(recovered.targetEntity === 'Supplier Alpha', 'Persisted record preserves targetEntity across reload');
+  assert(recovered.source === 'USER_TAUGHT', 'Persisted record preserves USER_TAUGHT origin');
+}
+
+// ----------------------------------------------------
+// TEST GROUP 7: Unprompted Retrieval & Causal Decision Shift
+// ----------------------------------------------------
+console.log('\n▶ TEST GROUP 7: Unprompted Retrieval & Causal Decision Shift (Memory ON vs OFF)');
+{
+  const liveStore = new ExperienceStore('eval_store');
+  
+  // Baseline without taught memory
+  const traceBaseline = evaluateCognitiveDecision({
+    query: 'Should I choose Supplier Alpha or Supplier Beta under current port congestion (60%)?',
+    environmentState: { portCongestion: 0.60, demandVolatility: 0.15 } as any,
+    experienceStore: liveStore,
+  });
+
+  // Default baseline without memory chooses Supplier Alpha because maritime is cheaper ($1,200 vs $3,200)
+  assert(traceBaseline.retrievedMemories.length === 0, 'No relevant memories retrieved in empty store');
+  assert(traceBaseline.baseline.selectedActionLabel.includes('Alpha') || traceBaseline.baseline.selectedActionLabel.includes('Maritime'), 'Baseline chooses cheaper Supplier Alpha');
+
+  // Now teach the agent about Supplier Alpha's congestion bottleneck
+  const taught = parseUserTeaching('Remember that Supplier Alpha was delayed by 4.5 days when port congestion reached 60%');
+  liveStore.addExperience(taught.experienceRecord);
+
+  // Re-evaluate the exact same decision
+  const traceInformed = evaluateCognitiveDecision({
+    query: 'Should I choose Supplier Alpha or Supplier Beta under current port congestion (60%)?',
+    environmentState: { portCongestion: 0.60, demandVolatility: 0.15 } as any,
+    experienceStore: liveStore,
+  });
+
+  assert(traceInformed.retrievedMemories.length > 0, 'Unpromptedly retrieves matching taught experience');
+  assert(traceInformed.retrievedMemories[0].influencedPrediction === true, 'Memory actively influenced delay prediction');
+  assert(traceInformed.causalDelta.decisionChanged === true, 'Taught memory caused a real decision shift away from bottlenecked supplier');
+  assert(traceInformed.experienceInformed.selectedActionLabel.includes('Beta') || traceInformed.experienceInformed.selectedActionLabel.includes('Dual') || traceInformed.experienceInformed.selectedActionLabel.includes('Express'), 'Switched to resilient alternative');
+  assert(traceInformed.causalDelta.delayDeltaDays > 0, 'Predicted delay delta accounts for the observed delay');
+}
+
+// ----------------------------------------------------
+// TEST GROUP 8: Negative Control (Contextual Mismatch Does NOT Overgeneralize)
+// ----------------------------------------------------
+console.log('\n▶ TEST GROUP 8: Negative Control (No Overgeneralization under Low Congestion)');
+{
+  const liveStore = new ExperienceStore('neg_ctrl_store');
+  const taught = parseUserTeaching('Supplier Alpha had 4 days delay during heavy port congestion 0.65');
+  liveStore.addExperience(taught.experienceRecord);
+
+  // Evaluate in a low-congestion environment (portCongestion = 0.10)
+  const traceLowCongestion = evaluateCognitiveDecision({
+    query: 'Choose supplier for low congestion port conditions (10%)',
+    environmentState: { portCongestion: 0.10, demandVolatility: 0.10 } as any,
+    experienceStore: liveStore,
+  });
+
+  // Under low congestion, congestion-specific bottleneck memories should have zero or minimal relevance (< 0.5)
+  // and Supplier Alpha should remain optimal due to low cost and zero congestion delay.
+  const strongMatches = traceLowCongestion.retrievedMemories.filter(m => m.relevanceScore > 0.7);
+  assert(strongMatches.length === 0, 'Contextual distance metric suppresses irrelevant high-congestion memory under 10% congestion');
+}
+
+// ----------------------------------------------------
+// TEST GROUP 9: Multi-Episode Evidence Accumulation & Contradiction Handling
+// ----------------------------------------------------
+console.log('\n▶ TEST GROUP 9: Multi-Episode Evidence Accumulation & Contradiction Handling');
+{
+  const candidateAction = { actionType: 'SUPPLIER_ALPHA', targetEntity: 'Supplier Alpha', parameters: { mode: 'maritime' } };
+  const context = { demandVolatility: 0.20, portCongestion: 0.60, inventoryDays: 1.5 };
+
+  // Episode 1: Severe Delay Observed
+  const ep1 = parseUserTeaching('Supplier Alpha was 4 days late under port congestion 0.60').experienceRecord;
+  const acc1 = accumulateEvidenceForAction(candidateAction.actionType, candidateAction.targetEntity, [ep1], context);
+  assert(acc1.supportingEpisodes && acc1.supportingEpisodes.length === 1, 'Episode 1 counted as supporting penalty evidence');
+  assert(acc1.netDelayAdjustmentDays > 2.0, 'Substantial positive delay adjustment applied from ep1');
+  assert(acc1.hasEpistemicConflict === false, 'No epistemic conflict with single episode');
+
+  // Episode 2: Contradicting On-Time Delivery under Same Conditions
+  const ep2 = parseUserTeaching('Supplier Alpha arrived on time with 0 days delay under port congestion 0.60').experienceRecord;
+  const acc2 = accumulateEvidenceForAction(candidateAction.actionType, candidateAction.targetEntity, [ep1, ep2], context);
+  assert(acc2.supportingEpisodes && acc2.supportingEpisodes.length === 1, 'Episode 1 still recorded as delay support');
+  assert(acc2.contradictingEpisodes && acc2.contradictingEpisodes.length === 1, 'Episode 2 recorded as contradiction / on-time evidence');
+  assert(acc2.hasEpistemicConflict === true, 'Epistemic conflict flag raised due to mixed evidence');
+  assert(acc2.netDelayAdjustmentDays < acc1.netDelayAdjustmentDays, 'Net delay penalty is proportionally discounted by contradicting evidence');
 }
 
 console.log('\n====================================================');
